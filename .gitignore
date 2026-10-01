@@ -1,0 +1,46 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing & Coverage
+/coverage
+
+# Next.js Build Output
+/.next/
+/out/
+/build
+
+# Production Build Artifacts
+tsconfig.tsbuildinfo
+next-env.d.ts.bak
+
+# Environment Variables & Secrets (CRITICAL: Never commit API keys!)
+.env
+.env*.local
+!.env.example
+
+# Setup marker and temporary files
+.setup_complete
+.perm_check.tmp
+*.tmp
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+console.log*
+
+# Git Windows restriction: Filenames with trailing spaces are blocked by Git on Windows
+# Keep standard "Project Management" tracked, ignore the trailing-space duplicate
+Project Management\ 
+!Project Management
+
+# OS / Editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln

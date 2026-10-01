@@ -1,0 +1,19 @@
+Task_ID,Task_Name,Department,Owner,Status,Priority,Budget,Actual_Spend,Progress,Due_Date,Blocked
+T-001,Database Migration,Engineering,Alice Smith,Completed,High,50000,48000,100,9/1/2026,No
+T-002,API Integration,Engineering,Bob Jones,Completed,High,30000,29000,100,9/5/2026,No
+T-003,Frontend Refactor,Engineering,Charlie Day,In Progress,Medium,30000,25000,54,10/15/2026,No
+T-004,CI/CD Pipeline Setup,Engineering,Dave Lee,Completed,High,30000,30000,100,9/10/2026,No
+T-005,Brand Strategy,Marketing,Eve White,Completed,Medium,20000,19500,100,8/20/2026,No
+T-006,Social Media Campaign,Marketing,Frank Green,In Progress,Medium,20000,10000,54,10/20/2026,No
+T-007,Q3 Webinar,Marketing,Grace Kim,Cancelled,Low,20000,2000,0,9/30/2026,No
+T-008,Logo Redesign,Design,Heidi Wang,Completed,Medium,20000,20000,100,8/15/2026,yes
+T-009,UI Mockups v2,Design,Ivan Roe,In Progress,High,20000,8000,54,10/5/2026,No
+T-010,User Testing,Design,Judy Chen,In Progress,Medium,25000,12000,50,10/25/2026,Yes
+T-011,Enterprise Leads Gen,Sales,Alice Smith,Completed,High,25000,24000,100,9/15/2026,No
+T-012,CRM Implementation,Sales,Bob Jones,Blocked,Critical,25000,15000,40,10/10/2026,Yes
+T-013,Q4 Sales Playbook,Sales,Charlie Day,In Progress,Medium,25000,10000,54,11/1/2026,Yes
+T-014,Client Onboarding,Sales,Dave Lee,In Progress,High,25000,15000,50,10/12/2026,No
+T-015,Office Relocation,Operations,Eve White,Completed,High,17000,17000,100,9/1/2026,No
+T-016,Vendor Contracts,Operations,Frank Green,In Progress,Medium,17000,8000,60,10/18/2026,No
+T-017,Equipment Audit,Operations,Grace Kim,In Progress,Low,17000,5000,54,11/10/2026,No
+T-018,Security Training,Operations,Heidi Wang,In Progress,Medium,17000,9000,54,10/22/2026,No
