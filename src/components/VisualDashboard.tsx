@@ -37,6 +37,7 @@ import {
 import { useData, formatCompactCurrency } from '@/context/DataContext';
 import { TimelineVisualization } from './TimelineVisualization';
 import { GanttChartVisualization } from './GanttChartVisualization';
+import { ChartErrorBoundary } from './ChartErrorBoundary';
 
 export const getStatusColor = (status: string): string => {
   const s = (status || '').toLowerCase();
@@ -315,6 +316,7 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
   const {
     dataset,
     rawDataset,
+    filteredDataset,
     summary,
     highlightIds,
     clearHighlights,
@@ -493,8 +495,9 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
     });
   }, [summary.departmentDistribution, highlightIds, isCrossFiltering, dataset, activeDepartment]);
 
-  // Placeholder when no dataset is present
-  if (dataset.length === 0) {
+  // Requirement 2: Only show "Please Upload a Dataset" screen if the raw dataset is empty.
+  // It should NEVER trigger based on the length of filteredDataset or active filter results.
+  if (!rawDataset || rawDataset.length === 0) {
     return (
       <div className="visual-dashboard-container">
         <div className="empty-dataset-card">
@@ -915,95 +918,183 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
         </div>
       </div>
 
-      {/* Chronological Stacked Column Timeline Visualization */}
-      <TimelineVisualization />
-
-      {/* Chart 1: Financial Spend by Task Status (Donut Chart) */}
-      <div className="chart-card">
-        <div className="chart-card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <PieIcon size={16} color="#38BDF8" />
-            <h3 className="chart-title">Financial Spend by Task Status</h3>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {activeStatus && (
-              <button
-                type="button"
-                className="btn-clear-filter"
-                onClick={() => setActiveStatus(null)}
-                style={{ padding: '2px 8px', fontSize: '0.68rem' }}
-                title="Reset status filter"
-              >
-                <X size={11} />
-                <span>Status: {activeStatus}</span>
-              </button>
-            )}
-            {isCrossFiltering && (
-              <span className="crossfilter-indicator">Cross-Filtering Active</span>
-            )}
-          </div>
-        </div>
-
-        <div style={{ position: 'relative', height: 210, width: '100%' }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={statusData}
-                dataKey="spend"
-                nameKey="status"
-                cx="50%"
-                cy="50%"
-                innerRadius={52}
-                outerRadius={80}
-                paddingAngle={3}
-                onClick={(entry: any) => {
-                  if (entry && entry.status) {
-                    setActiveStatus(entry.status);
-                  }
-                }}
-              >
-                {statusData.map((entry, index) => (
-                  <Cell
-                    key={`status-donut-${index}`}
-                    fill={entry.color}
-                    fillOpacity={entry.opacity}
-                    stroke={entry.isSelected ? '#FFFFFF' : entry.isHighlighted ? '#FFFFFF' : 'rgba(15, 23, 42, 0.8)'}
-                    strokeWidth={entry.isSelected ? 3 : entry.isHighlighted ? 2.5 : 1.5}
-                    style={{ cursor: 'pointer', outline: 'none' }}
-                    onClick={() => setActiveStatus(entry.status)}
-                  />
-                ))}
-              </Pie>
-              <Tooltip content={<FinancialStatusTooltip />} />
-            </PieChart>
-          </ResponsiveContainer>
-
-          {/* Donut Center Label */}
+      {/* 3. Add friendly No Results UI state if rawDataset has records but filters yielded zero results */}
+      {dataset.length === 0 ? (
+        <div
+          className="chart-card no-results-card"
+          style={{
+            padding: '48px 24px',
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(15, 23, 42, 0.6)',
+            borderRadius: '12px',
+            border: '1px dashed rgba(255, 255, 255, 0.15)',
+            marginTop: '12px',
+            marginBottom: '16px',
+          }}
+        >
           <div
             style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              textAlign: 'center',
-              pointerEvents: 'none',
+              width: 56,
+              height: 56,
+              borderRadius: '50%',
+              background: 'rgba(245, 158, 11, 0.12)',
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '16px',
             }}
           >
-            <div
+            <Filter size={26} color="#F59E0B" />
+          </div>
+          <h3 style={{ fontSize: '1.05rem', fontWeight: 600, color: '#F1F5F9', margin: '0 0 8px 0' }}>
+            No Matching Tasks Found
+          </h3>
+          <p
+            style={{
+              color: '#94A3B8',
+              fontSize: '0.88rem',
+              maxWidth: '460px',
+              margin: '0 auto 20px auto',
+              lineHeight: 1.5,
+            }}
+          >
+            No tasks match the selected filters. Please adjust your criteria or clear filters.
+          </p>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button
+              id="btn-clear-no-results-filters"
+              type="button"
+              className="btn-primary"
               style={{
-                fontSize: '0.64rem',
-                color: '#94A3B8',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
+                width: 'auto',
+                padding: '9px 20px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '7px',
+                fontSize: '0.84rem',
+                fontWeight: 600,
               }}
+              onClick={clearAllFilters}
             >
-              Total Spend
-            </div>
-            <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#FFFFFF' }}>
-              ${((summary.totalSpend || 0) / 1000).toFixed(0)}k
-            </div>
+              <X size={15} />
+              <span>Clear All Filters</span>
+            </button>
           </div>
         </div>
+      ) : (
+        <>
+          {/* Chronological Stacked Column Timeline Visualization */}
+          <TimelineVisualization />
+
+      {/* Chart 1: Financial Spend by Task Status (Donut Chart) */}
+      <ChartErrorBoundary fallbackTitle="Financial Spend Chart Unavailable" onReset={clearAllFilters}>
+        <div className="chart-card">
+          <div className="chart-card-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <PieIcon size={16} color="#38BDF8" />
+              <h3 className="chart-title">Financial Spend by Task Status</h3>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {activeStatus && (
+                <button
+                  type="button"
+                  className="btn-clear-filter"
+                  onClick={() => setActiveStatus(null)}
+                  style={{ padding: '2px 8px', fontSize: '0.68rem' }}
+                  title="Reset status filter"
+                >
+                  <X size={11} />
+                  <span>Status: {activeStatus}</span>
+                </button>
+              )}
+              {isCrossFiltering && (
+                <span className="crossfilter-indicator">Cross-Filtering Active</span>
+              )}
+            </div>
+          </div>
+
+          <div style={{ position: 'relative', height: 210, width: '100%' }}>
+            {statusData.length === 0 ? (
+              <div
+                style={{
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#94A3B8',
+                  fontSize: '0.82rem',
+                }}
+              >
+                No tasks match the selected filters. Please adjust your criteria or clear filters.
+              </div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={statusData}
+                      dataKey="spend"
+                      nameKey="status"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={52}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      onClick={(entry: any) => {
+                        if (entry && entry.status) {
+                          setActiveStatus(entry.status);
+                        }
+                      }}
+                    >
+                      {statusData.map((entry, index) => (
+                        <Cell
+                          key={`status-donut-${index}`}
+                          fill={entry.color}
+                          fillOpacity={entry.opacity}
+                          stroke={entry.isSelected ? '#FFFFFF' : entry.isHighlighted ? '#FFFFFF' : 'rgba(15, 23, 42, 0.8)'}
+                          strokeWidth={entry.isSelected ? 3 : entry.isHighlighted ? 2.5 : 1.5}
+                          style={{ cursor: 'pointer', outline: 'none' }}
+                          onClick={() => setActiveStatus(entry.status)}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<FinancialStatusTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+
+                {/* Donut Center Label */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    textAlign: 'center',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: '0.64rem',
+                      color: '#94A3B8',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    Total Spend
+                  </div>
+                  <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#FFFFFF' }}>
+                    ${((summary.totalSpend || 0) / 1000).toFixed(0)}k
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
 
         {/* Status Legend & Financial Breakdown */}
         <div
@@ -1056,9 +1147,11 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           ))}
         </div>
       </div>
+      </ChartErrorBoundary>
 
       {/* Chart 2: Project Initiative Budget Utilization (Horizontal Stacked Bar Chart) */}
-      <div className="chart-card">
+      <ChartErrorBoundary fallbackTitle="Budget Utilization Chart Unavailable" onReset={clearAllFilters}>
+        <div className="chart-card">
         <div className="chart-card-header" style={{ alignItems: 'flex-start' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1162,13 +1255,25 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
             width: '100%',
           }}
         >
-          <div
-            style={{
-              height: Math.max(260, paginatedBudgetData.length * 40),
-              width: '100%',
-            }}
-          >
-            <ResponsiveContainer width="100%" height="100%">
+          {paginatedBudgetData.length === 0 ? (
+            <div
+              style={{
+                padding: '36px 16px',
+                textAlign: 'center',
+                color: '#94A3B8',
+                fontSize: '0.82rem',
+              }}
+            >
+              No tasks match the selected filters. Please adjust your criteria or clear filters.
+            </div>
+          ) : (
+            <div
+              style={{
+                height: Math.max(260, paginatedBudgetData.length * 40),
+                width: '100%',
+              }}
+            >
+              <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 layout="vertical"
                 data={paginatedBudgetData}
@@ -1270,7 +1375,8 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        )}
+      </div>
 
         {/* Pagination Bar for Budget Initiatives (15 per page) */}
         {projectBudgetData.length > BUDGET_PAGE_SIZE && (
@@ -1304,94 +1410,113 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           </div>
         )}
       </div>
+      </ChartErrorBoundary>
 
       {/* Chart 3: Department Breakdown (Pie Chart) */}
-      <div className="chart-card">
-        <div className="chart-card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <PieIcon size={16} color="#06B6D4" />
-            <h3 className="chart-title">Tasks by Department</h3>
+      <ChartErrorBoundary fallbackTitle="Department Workload Chart Unavailable" onReset={clearAllFilters}>
+        <div className="chart-card">
+          <div className="chart-card-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <PieIcon size={16} color="#06B6D4" />
+              <h3 className="chart-title">Tasks by Department</h3>
+            </div>
+            {activeDepartment && (
+              <button
+                type="button"
+                className="btn-clear-filter"
+                onClick={() => setActiveDepartment(null)}
+                style={{ padding: '2px 8px', fontSize: '0.68rem' }}
+                title="Reset department filter"
+              >
+                <X size={11} />
+                <span>Dept: {activeDepartment}</span>
+              </button>
+            )}
           </div>
-          {activeDepartment && (
-            <button
-              type="button"
-              className="btn-clear-filter"
-              onClick={() => setActiveDepartment(null)}
-              style={{ padding: '2px 8px', fontSize: '0.68rem' }}
-              title="Reset department filter"
-            >
-              <X size={11} />
-              <span>Dept: {activeDepartment}</span>
-            </button>
-          )}
-        </div>
 
-        <div style={{ height: 180, width: '100%' }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={deptData}
-                dataKey="count"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                outerRadius={65}
-                innerRadius={35}
-                paddingAngle={3}
-                onClick={(entry: any) => {
-                  if (entry && entry.name) {
-                    setActiveDepartment(entry.name);
-                  }
+          <div style={{ height: 180, width: '100%' }}>
+            {deptData.length === 0 ? (
+              <div
+                style={{
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#94A3B8',
+                  fontSize: '0.82rem',
                 }}
               >
-                {deptData.map((entry, index) => (
-                  <Cell
-                    key={`dept-${index}`}
-                    fill={entry.color}
-                    fillOpacity={entry.opacity}
-                    stroke={entry.isSelected ? '#FFFFFF' : entry.isHighlighted ? '#FFFFFF' : 'transparent'}
-                    strokeWidth={entry.isSelected ? 3 : entry.isHighlighted ? 2 : 0}
-                    style={{ cursor: 'pointer', outline: 'none' }}
-                    onClick={() => setActiveDepartment(entry.name)}
-                  />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#0F172A',
-                  borderColor: 'rgba(255,255,255,0.15)',
-                  borderRadius: '8px',
-                  fontSize: '11px',
-                  color: '#F8FAFC',
-                }}
-              />
-              <Legend
-                onClick={(e: any) => {
-                  if (e && e.value) {
-                    setActiveDepartment(e.value);
-                  }
-                }}
-                formatter={(value) => (
-                  <span
-                    style={{
-                      color: activeDepartment?.toLowerCase() === value?.toLowerCase() ? '#38BDF8' : '#CBD5E1',
-                      fontWeight: activeDepartment?.toLowerCase() === value?.toLowerCase() ? 700 : 500,
-                      fontSize: '11px',
-                      cursor: 'pointer',
+                No tasks match the selected filters. Please adjust your criteria or clear filters.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={deptData}
+                    dataKey="count"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={65}
+                    innerRadius={35}
+                    paddingAngle={3}
+                    onClick={(entry: any) => {
+                      if (entry && entry.name) {
+                        setActiveDepartment(entry.name);
+                      }
                     }}
-                    title={`Click to filter by Department: ${value}`}
                   >
-                    {value}
-                  </span>
-                )}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+                    {deptData.map((entry, index) => (
+                      <Cell
+                        key={`dept-${index}`}
+                        fill={entry.color}
+                        fillOpacity={entry.opacity}
+                        stroke={entry.isSelected ? '#FFFFFF' : entry.isHighlighted ? '#FFFFFF' : 'transparent'}
+                        strokeWidth={entry.isSelected ? 3 : entry.isHighlighted ? 2 : 0}
+                        style={{ cursor: 'pointer', outline: 'none' }}
+                        onClick={() => setActiveDepartment(entry.name)}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0F172A',
+                      borderColor: 'rgba(255,255,255,0.15)',
+                      borderRadius: '8px',
+                      fontSize: '11px',
+                      color: '#F8FAFC',
+                    }}
+                  />
+                  <Legend
+                    onClick={(e: any) => {
+                      if (e && e.value) {
+                        setActiveDepartment(e.value);
+                      }
+                    }}
+                    formatter={(value) => (
+                      <span
+                        style={{
+                          color: activeDepartment?.toLowerCase() === value?.toLowerCase() ? '#38BDF8' : '#CBD5E1',
+                          fontWeight: activeDepartment?.toLowerCase() === value?.toLowerCase() ? 700 : 500,
+                          fontSize: '11px',
+                          cursor: 'pointer',
+                        }}
+                        title={`Click to filter by Department: ${value}`}
+                      >
+                        {value}
+                      </span>
+                    )}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </div>
         </div>
-      </div>
+      </ChartErrorBoundary>
 
       {/* Main Granular Data Table Component with Horizontal Scrolling */}
-      <div className="chart-card" style={{ marginBottom: 0 }}>
+      <ChartErrorBoundary fallbackTitle="Tasks Table Unavailable" onReset={clearAllFilters}>
+        <div className="chart-card" style={{ marginBottom: 0 }}>
         <div className="chart-card-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Filter size={15} color="#A5B4FC" />
@@ -1435,7 +1560,27 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
               </tr>
             </thead>
             <tbody>
-              {paginatedTableTasks.map((task) => {
+              {paginatedTableTasks.length === 0 ? (
+                <tr>
+                  <td colSpan={11} style={{ textAlign: 'center', padding: '40px 16px', color: '#94A3B8' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                      <Filter size={24} color="#F59E0B" />
+                      <span style={{ fontWeight: 600, color: '#F1F5F9', fontSize: '0.88rem' }}>
+                        No tasks match the selected filters. Please adjust your criteria or clear filters.
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-clear-filter"
+                        onClick={clearAllFilters}
+                        style={{ marginTop: '8px', padding: '5px 14px', fontSize: '0.76rem' }}
+                      >
+                        Clear Filters
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                paginatedTableTasks.map((task) => {
                 const isSelected = highlightIds.includes(task.Task_ID);
                 const manager = task.Project_Manager || task.Owner || 'Unassigned';
                 const startDateStr =
@@ -1599,7 +1744,7 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
                     </td>
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>
@@ -1636,9 +1781,12 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           </div>
         )}
       </div>
+      </ChartErrorBoundary>
 
       {/* Gantt Chart Component at the bottom of the dashboard layout */}
       <GanttChartVisualization />
+        </>
+      )}
     </div>
   );
 };

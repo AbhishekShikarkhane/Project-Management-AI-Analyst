@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useData } from '@/context/DataContext';
 import { ProjectTask } from '@/lib/dataset';
+import { ChartErrorBoundary } from './ChartErrorBoundary';
 
 // Curated harmonious color palette for stacked project series
 const PROJECT_COLORS = [
@@ -322,7 +323,8 @@ export const TimelineVisualization: React.FC = () => {
   const maxTeamMembers = Math.max(...chartData.map((d) => d.teamMembersCount), 1);
 
   return (
-    <div className="chart-card" style={{ marginBottom: 16 }}>
+    <ChartErrorBoundary fallbackTitle="Timeline Visualization Unavailable">
+      <div className="chart-card" style={{ marginBottom: 16 }}>
       {/* Header with Title and Mode Controls */}
       <div className="chart-card-header" style={{ alignItems: 'flex-start' }}>
         <div>
@@ -701,6 +703,7 @@ export const TimelineVisualization: React.FC = () => {
         })}
       </div>
     </div>
+    </ChartErrorBoundary>
   );
 };
 

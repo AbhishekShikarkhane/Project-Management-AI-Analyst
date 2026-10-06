@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useData, cleanNumber } from '@/context/DataContext';
 import { ProjectTask } from '@/lib/dataset';
+import { ChartErrorBoundary } from './ChartErrorBoundary';
 
 /**
  * Robust date parser ensuring 100% genuine JavaScript Date objects in local time.
@@ -646,74 +647,76 @@ export const GanttChartVisualization: React.FC = () => {
       </div>
 
       {/* Gantt Chart Content */}
-      {ganttTasks.length === 0 ? (
-        <div
-          style={{
-            padding: '36px 20px',
-            textAlign: 'center',
-            background: 'rgba(15, 23, 42, 0.4)',
-            borderRadius: '8px',
-            border: '1px dashed rgba(255, 255, 255, 0.1)',
-          }}
-        >
-          <AlertTriangle size={24} color="#F59E0B" style={{ margin: '0 auto 8px auto' }} />
-          <div style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '0.88rem' }}>
-            No project tasks match the active filters
-          </div>
-          <p style={{ color: '#94A3B8', fontSize: '0.78rem', margin: '4px 0 12px 0' }}>
-            Reset your cross-filters to reveal the complete project schedule.
-          </p>
-          <button
-            type="button"
-            className="btn-icon"
+      <ChartErrorBoundary fallbackTitle="Gantt Timeline Chart Unavailable" onReset={clearAllFilters}>
+        {ganttTasks.length === 0 ? (
+          <div
             style={{
-              margin: '0 auto',
-              background: 'rgba(99, 102, 241, 0.2)',
-              borderColor: 'rgba(99, 102, 241, 0.4)',
-              color: '#FFFFFF',
+              padding: '36px 20px',
+              textAlign: 'center',
+              background: 'rgba(15, 23, 42, 0.4)',
+              borderRadius: '8px',
+              border: '1px dashed rgba(255, 255, 255, 0.1)',
             }}
-            onClick={clearAllFilters}
           >
-            Clear Filters
-          </button>
-        </div>
-      ) : (
-        /* 1 & 2. Scrollable container (strict max-h-[500px]) with visual timeline grid taking remaining width on right */
-        <div
-          className="gantt-scroll-wrapper max-h-[500px] overflow-y-auto overflow-x-auto"
-          style={{
-            maxHeight: '500px',
-            overflowY: 'auto',
-            overflowX: 'auto',
-            borderRadius: '8px',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            background: '#0B132B',
-          }}
-        >
-          <div style={{ width: '100%', minWidth: '850px' }}>
-            <Gantt
-              tasks={ganttTasks}
-              viewMode={viewMode}
-              onClick={(task) => toggleHighlightId(task.id)}
-              headerHeight={44}
-              columnWidth={columnWidth}
-              listCellWidth="116px"
-              rowHeight={38}
-              ganttHeight={ganttHeight}
-              barCornerRadius={4}
-              barFill={70}
-              barProgressColor="rgba(255, 255, 255, 0.25)"
-              barProgressSelectedColor="rgba(255, 255, 255, 0.35)"
-              barBackgroundColor="#0284C7"
-              barBackgroundSelectedColor="#0369A1"
-              todayColor="rgba(56, 189, 248, 0.25)"
-              TaskListHeader={CustomTaskListHeader}
-              TaskListTable={CustomTaskListTable}
-              TooltipContent={({ task }) => <CustomGanttTooltip task={task} />}
-            />
+            <AlertTriangle size={24} color="#F59E0B" style={{ margin: '0 auto 8px auto' }} />
+            <div style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '0.88rem' }}>
+              No tasks match the selected filters. Please adjust your criteria or clear filters.
+            </div>
+            <p style={{ color: '#94A3B8', fontSize: '0.78rem', margin: '4px 0 12px 0' }}>
+              Reset or change your filter selections to display matching project schedules.
+            </p>
+            <button
+              type="button"
+              className="btn-icon"
+              style={{
+                margin: '0 auto',
+                background: 'rgba(99, 102, 241, 0.2)',
+                borderColor: 'rgba(99, 102, 241, 0.4)',
+                color: '#FFFFFF',
+              }}
+              onClick={clearAllFilters}
+            >
+              Clear Filters
+            </button>
           </div>
-        </div>
-      )}
+        ) : (
+          /* 1 & 2. Scrollable container (strict max-h-[500px]) with visual timeline grid taking remaining width on right */
+          <div
+            className="gantt-scroll-wrapper max-h-[500px] overflow-y-auto overflow-x-auto"
+            style={{
+              maxHeight: '500px',
+              overflowY: 'auto',
+              overflowX: 'auto',
+              borderRadius: '8px',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              background: '#0B132B',
+            }}
+          >
+            <div style={{ width: '100%', minWidth: '850px' }}>
+              <Gantt
+                tasks={ganttTasks}
+                viewMode={viewMode}
+                onClick={(task) => toggleHighlightId(task.id)}
+                headerHeight={44}
+                columnWidth={columnWidth}
+                listCellWidth="116px"
+                rowHeight={38}
+                ganttHeight={ganttHeight}
+                barCornerRadius={4}
+                barFill={70}
+                barProgressColor="rgba(255, 255, 255, 0.25)"
+                barProgressSelectedColor="rgba(255, 255, 255, 0.35)"
+                barBackgroundColor="#0284C7"
+                barBackgroundSelectedColor="#0369A1"
+                todayColor="rgba(56, 189, 248, 0.25)"
+                TaskListHeader={CustomTaskListHeader}
+                TaskListTable={CustomTaskListTable}
+                TooltipContent={({ task }) => <CustomGanttTooltip task={task} />}
+              />
+            </div>
+          </div>
+        )}
+      </ChartErrorBoundary>
     </div>
   );
 };
