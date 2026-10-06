@@ -29,6 +29,8 @@ export const ChatInterface: React.FC = () => {
     clearHighlights,
     toggleHighlightId,
     generateLiveData,
+    loadPortfolioData,
+    clearDataset,
     isGenerating,
   } = useData();
 
@@ -217,6 +219,12 @@ export const ChatInterface: React.FC = () => {
         hasApiKey={Boolean(apiKey)}
         onOpenUpload={() => setIsUploadModalOpen(true)}
         onGenerateLiveData={generateLiveData}
+        onLoadPortfolio={() => loadPortfolioData(150)}
+        onResetDashboard={() => {
+          clearDataset();
+          clearHighlights();
+          setMessages([]);
+        }}
         isGenerating={isGenerating}
         onOpenDataset={() => setIsDrawerOpen(true)}
         onOpenApiKey={() => setIsApiKeyModalOpen(true)}

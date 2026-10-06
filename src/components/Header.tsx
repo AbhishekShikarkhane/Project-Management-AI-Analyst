@@ -10,6 +10,8 @@ import {
   Sparkles,
   UploadCloud,
   Wand2,
+  Layers,
+  RotateCcw,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -19,6 +21,8 @@ interface HeaderProps {
   onOpenDataset: () => void;
   onOpenUpload: () => void;
   onGenerateLiveData: () => void;
+  onLoadPortfolio?: () => void;
+  onResetDashboard?: () => void;
   isGenerating?: boolean;
   onOpenApiKey: () => void;
   onClearChat: () => void;
@@ -33,6 +37,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDataset,
   onOpenUpload,
   onGenerateLiveData,
+  onLoadPortfolio,
+  onResetDashboard,
   isGenerating = false,
   onOpenApiKey,
   onClearChat,
@@ -58,6 +64,25 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="header-actions">
+        {/* Load 150-Project Portfolio Button */}
+        {onLoadPortfolio && (
+          <button
+            id="btn-header-load-portfolio"
+            type="button"
+            className="btn-icon"
+            style={{
+              background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.18) 0%, rgba(99, 102, 241, 0.18) 100%)',
+              borderColor: 'rgba(56, 189, 248, 0.5)',
+              color: '#38BDF8',
+              fontWeight: 600,
+            }}
+            onClick={onLoadPortfolio}
+            title="Load deterministic 150-project portfolio dataset with edge cases (blockers, overruns, slippage, bottlenecks)"
+          >
+            <Layers size={14} color="#38BDF8" />
+            <span>Load 150-Project Portfolio</span>
+          </button>
+        )}
         {/* Generate Live Data Button */}
         <button
           id="btn-generate-live-data"
@@ -110,10 +135,30 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="pulse-dot" />
           <Database size={14} />
           <span>
-            {datasetName || 'Project Management '}
+            {datasetName || 'Project Portfolio'}
             {recordCount > 0 && ` [${recordCount}]`}
           </span>
         </button>
+
+        {/* Clear Data / Reset Dashboard Button */}
+        {recordCount > 0 && onResetDashboard && (
+          <button
+            id="btn-reset-dashboard"
+            type="button"
+            className="btn-icon"
+            style={{
+              background: 'rgba(239, 68, 68, 0.12)',
+              borderColor: 'rgba(239, 68, 68, 0.35)',
+              color: '#FCA5A5',
+              fontWeight: 500,
+            }}
+            onClick={onResetDashboard}
+            title="Clear stored data and reset dashboard to empty upload screen"
+          >
+            <RotateCcw size={14} color="#F87171" />
+            <span>Reset Dashboard</span>
+          </button>
+        )}
 
         {/* API Key Config */}
         <button

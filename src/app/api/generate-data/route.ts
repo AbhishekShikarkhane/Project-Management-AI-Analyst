@@ -194,10 +194,11 @@ STRICT CONSTRAINT: Return ONLY a valid JSON array of 30 task objects with all nu
 `.trim();
 
     const candidateModels = [
+      'gemini-2.5-flash',
+      'gemini-1.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-pro',
       'gemini-3.5-flash',
-      'gemini-flash-latest',
-      'gemini-3.1-pro-preview',
-      'gemini-3.8-flash',
     ];
 
     let generatedTasks: ProjectTask[] | null = null;
@@ -253,21 +254,42 @@ STRICT CONSTRAINT: Return ONLY a valid JSON array of 30 task objects with all nu
       generatedTasks = generateProceduralMockData();
     }
 
-    return NextResponse.json({
-      success: true,
-      data: generatedTasks,
-      count: generatedTasks.length,
-      source: 'Gemini AI Generator',
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: generatedTasks,
+        count: generatedTasks.length,
+        source: 'Gemini AI Generator',
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Connection': 'close',
+        },
+      }
+    );
   } catch (error: any) {
     console.error('API /api/generate-data error:', error);
     // Always provide the fallback mock data so the user never gets an error
     const fallback = generateProceduralMockData();
-    return NextResponse.json({
-      success: true,
-      data: fallback,
-      count: fallback.length,
-      source: 'Fallback Realistic Generator',
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: fallback,
+        count: fallback.length,
+        source: 'Fallback Realistic Generator',
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Connection': 'close',
+        },
+      }
+    );
   }
 }
+
+export async function GET(req: NextRequest) {
+  return POST(req);
+}
+

@@ -57,7 +57,7 @@ ANALYST CAPABILITIES ON GRANULAR PROJECT DATA:
 - Financial Variance: Compare Allocated_Budget_USD against Actual_Spend_USD alongside Risk_Level and Status.
 
 HIGHLIGHT RULES:
-- In "highlight_ids", include an array of exact Task_ID strings (e.g. ["PRJ-101", "PRJ-103"]) for every task that is directly mentioned, analyzed, belongs to the queried category/owner/department/status, or caused a blocker/variance/deadline risk/resource bottleneck.
+- In "highlight_ids", include an array of exact Task_ID strings (e.g. ["TASK-001", "TASK-002"]) for every task that is directly mentioned, analyzed, belongs to the queried category/owner/department/status, or caused a blocker/variance/deadline risk/resource bottleneck.
 - If the question is about blocked tasks, return the IDs of all blocked tasks.
 - If the question is about over-budget items, return the IDs of those over-budget tasks.
 - If the question is about deadline risks or high-risk tasks, return their IDs.
@@ -127,53 +127,65 @@ Remember: Return ONLY valid JSON with "text_response" and "highlight_ids".
 }
 
 function parseAnalystResponse(rawText: string): AnalystResponse {
+  let text_response = '';
+  let highlight_ids: string[] = [];
   const trimmed = rawText.trim();
 
   // Try direct parse
   try {
     const obj = JSON.parse(trimmed);
     if (obj && typeof obj.text_response === 'string') {
-      return {
-        text_response: obj.text_response,
-        highlight_ids: Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [],
-      };
+      text_response = obj.text_response;
+      highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
     }
   } catch {}
 
   // Try extracting from markdown ```json ... ```
-  const jsonMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    try {
-      const obj = JSON.parse(jsonMatch[1]);
-      if (obj && typeof obj.text_response === 'string') {
-        return {
-          text_response: obj.text_response,
-          highlight_ids: Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [],
-        };
-      }
-    } catch {}
+  if (!text_response) {
+    const jsonMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      try {
+        const obj = JSON.parse(jsonMatch[1]);
+        if (obj && typeof obj.text_response === 'string') {
+          text_response = obj.text_response;
+          highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
+        }
+      } catch {}
+    }
   }
 
   // Try locating curly brackets { ... }
-  const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    try {
-      const slice = trimmed.substring(firstBrace, lastBrace + 1);
-      const obj = JSON.parse(slice);
-      if (obj && typeof obj.text_response === 'string') {
-        return {
-          text_response: obj.text_response,
-          highlight_ids: Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [],
-        };
-      }
-    } catch {}
+  if (!text_response) {
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        const slice = trimmed.substring(firstBrace, lastBrace + 1);
+        const obj = JSON.parse(slice);
+        if (obj && typeof obj.text_response === 'string') {
+          text_response = obj.text_response;
+          highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
+        }
+      } catch {}
+    }
   }
 
   // Fallback: raw text without structured JSON
+  if (!text_response) {
+    text_response = trimmed;
+  }
+
+  // Automatic Task ID extraction if highlight_ids is empty
+  if (highlight_ids.length === 0 && text_response) {
+    const matched = text_response.match(/\b(?:TASK|PRJ)-\d{3,4}\b/gi);
+    if (matched) {
+      highlight_ids = Array.from(new Set(matched.map((m) => m.toUpperCase())));
+    }
+  }
+
   return {
-    text_response: trimmed,
-    highlight_ids: [],
+    text_response,
+    highlight_ids,
   };
 }
 

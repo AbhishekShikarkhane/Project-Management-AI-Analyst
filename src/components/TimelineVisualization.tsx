@@ -51,9 +51,10 @@ interface MonthlyProjectDetail {
 }
 
 interface MonthlyTimelineDataPoint {
-  monthKey: string; // e.g. "2026-08"
-  monthLabel: string; // e.g. "August 2026"
-  shortLabel: string; // e.g. "Aug '26"
+  monthKey: string; // e.g. "2026-08" or "2026-Q3"
+  monthLabel: string; // e.g. "August 2026" or "Q3 2026"
+  shortLabel: string; // e.g. "Aug '26" or "Q3 '26"
+  displayLabel: string; // e.g. "Q3 2026" or "Aug '26"
   timestamp: number;
   teamMembersCount: number;
   teamMembersList: string[];
@@ -66,18 +67,19 @@ interface MonthlyTimelineDataPoint {
 export const TimelineVisualization: React.FC = () => {
   const { dataset, highlightIds } = useData();
   const [viewMode, setViewMode] = useState<'stacked100' | 'sum'>('stacked100');
+  const [scaleMode, setScaleMode] = useState<'auto' | 'month' | 'quarter'>('auto');
   const [hoveredProject, setHoveredProject] = useState<string | null>(null);
 
   const isCrossFiltering = highlightIds.length > 0;
 
-  // 1. Process dataset into chronological monthly timeline
+  // 1. Process dataset into chronological timeline with responsive Quarter/Month scaling
   const { chartData, allProjects, projectColorMap, timelineSpan } = useMemo(() => {
     if (!dataset || dataset.length === 0) {
       return {
         chartData: [] as MonthlyTimelineDataPoint[],
         allProjects: [] as string[],
         projectColorMap: {} as Record<string, string>,
-        timelineSpan: { start: '', end: '', totalMonths: 0 },
+        timelineSpan: { start: '', end: '', totalMonths: 0, aggregation: 'month', isAutoScaled: false },
       };
     }
 
@@ -94,89 +96,133 @@ export const TimelineVisualization: React.FC = () => {
       colorMap[p] = PROJECT_COLORS[idx % PROJECT_COLORS.length];
     });
 
-    // Map tasks to their active months
-    // A task is active across its [startDateObj, dueDateObj] span
-    const monthBuckets = new Map<
+    // Calculate total time span across all tasks to decide auto-scaling
+    let minTime = Infinity;
+    let maxTime = -Infinity;
+    dataset.forEach((task) => {
+      const start =
+        task.startDateObj instanceof Date && !isNaN(task.startDateObj.getTime())
+          ? task.startDateObj
+          : new Date(task.Start_Date || '2026-08-01');
+      const due =
+        task.dueDateObj instanceof Date && !isNaN(task.dueDateObj.getTime())
+          ? task.dueDateObj
+          : new Date(task.Due_Date || '2026-10-15');
+      if (start.getTime() < minTime) minTime = start.getTime();
+      if (due.getTime() > maxTime) maxTime = due.getTime();
+    });
+
+    const totalMonthsSpan =
+      minTime < maxTime
+        ? Math.max(1, Math.round((maxTime - minTime) / (1000 * 60 * 60 * 24 * 30.4)))
+        : 1;
+
+    // Requirement 4: If active dataset spans > 6 months, automatically aggregate by Quarter instead of Month
+    const isOver6Months = totalMonthsSpan > 6;
+    const effectiveAggregation: 'month' | 'quarter' =
+      scaleMode === 'auto' ? (isOver6Months ? 'quarter' : 'month') : scaleMode;
+
+    const buckets = new Map<
       string,
       {
-        monthKey: string;
+        key: string;
         date: Date;
+        label: string;
+        shortLabel: string;
         tasks: ProjectTask[];
       }
     >();
 
     dataset.forEach((task) => {
-      // Ensure date objects exist
       const start =
         task.startDateObj instanceof Date && !isNaN(task.startDateObj.getTime())
           ? task.startDateObj
-          : new Date(task.Start_Date || '2026-09-01');
-
+          : new Date(task.Start_Date || '2026-08-01');
       const due =
         task.dueDateObj instanceof Date && !isNaN(task.dueDateObj.getTime())
           ? task.dueDateObj
           : new Date(task.Due_Date || '2026-10-15');
 
-      const sYear = start.getFullYear();
-      const sMonth = start.getMonth();
-      const dYear = due.getFullYear();
-      const dMonth = due.getMonth();
-
-      // Normalize bounds
       const minDate = start.getTime() <= due.getTime() ? start : due;
       const maxDate = start.getTime() <= due.getTime() ? due : start;
 
-      let cur = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
-      const limit = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1);
-
-      let step = 0;
-      while (cur.getTime() <= limit.getTime() && step < 48) {
-        const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
-        if (!monthBuckets.has(key)) {
-          monthBuckets.set(key, {
-            monthKey: key,
-            date: new Date(cur),
-            tasks: [],
-          });
+      if (effectiveAggregation === 'quarter') {
+        let cur = new Date(minDate.getFullYear(), Math.floor(minDate.getMonth() / 3) * 3, 1);
+        const limit = new Date(maxDate.getFullYear(), Math.floor(maxDate.getMonth() / 3) * 3, 1);
+        let step = 0;
+        while (cur.getTime() <= limit.getTime() && step < 24) {
+          const qNum = Math.floor(cur.getMonth() / 3) + 1;
+          const qKey = `${cur.getFullYear()}-Q${qNum}`;
+          if (!buckets.has(qKey)) {
+            buckets.set(qKey, {
+              key: qKey,
+              date: new Date(cur),
+              label: `Q${qNum} ${cur.getFullYear()}`,
+              shortLabel: `Q${qNum} '${String(cur.getFullYear()).slice(2)}`,
+              tasks: [],
+            });
+          }
+          buckets.get(qKey)!.tasks.push(task);
+          cur.setMonth(cur.getMonth() + 3);
+          step++;
         }
-        monthBuckets.get(key)!.tasks.push(task);
-
-        cur.setMonth(cur.getMonth() + 1);
-        step++;
+      } else {
+        let cur = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+        const limit = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1);
+        let step = 0;
+        while (cur.getTime() <= limit.getTime() && step < 48) {
+          const mKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+          if (!buckets.has(mKey)) {
+            buckets.set(mKey, {
+              key: mKey,
+              date: new Date(cur),
+              label: cur.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
+              shortLabel: cur.toLocaleString('en-US', { month: 'short', year: '2-digit' }),
+              tasks: [],
+            });
+          }
+          buckets.get(mKey)!.tasks.push(task);
+          cur.setMonth(cur.getMonth() + 1);
+          step++;
+        }
       }
     });
 
-    // Chronologically sort month keys
-    const sortedKeys = Array.from(monthBuckets.keys()).sort();
+    // Chronologically sort keys
+    const sortedKeys = Array.from(buckets.keys()).sort();
 
     if (sortedKeys.length === 0) {
       return {
         chartData: [],
         allProjects: allProjectsList,
         projectColorMap: colorMap,
-        timelineSpan: { start: '', end: '', totalMonths: 0 },
+        timelineSpan: {
+          start: '',
+          end: '',
+          totalMonths: 0,
+          aggregation: effectiveAggregation,
+          isAutoScaled: isOver6Months && scaleMode === 'auto',
+        },
       };
     }
 
-    const startLabel = monthBuckets.get(sortedKeys[0])?.date.toLocaleString('en-US', {
-      month: 'short',
-      year: 'numeric',
-    });
-    const endLabel = monthBuckets
-      .get(sortedKeys[sortedKeys.length - 1])
-      ?.date.toLocaleString('en-US', {
-        month: 'short',
-        year: 'numeric',
-      });
+    const startLabel = buckets.get(sortedKeys[0])?.label || '';
+    const endLabel = buckets.get(sortedKeys[sortedKeys.length - 1])?.label || '';
 
     // Build Recharts data points
     const points: MonthlyTimelineDataPoint[] = sortedKeys.map((key) => {
-      const bucket = monthBuckets.get(key)!;
+      const bucket = buckets.get(key)!;
       const d = bucket.date;
-      const monthLabel = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-      const shortLabel = d.toLocaleString('en-US', { month: 'short', year: '2-digit' });
+      const monthLabel = bucket.label;
+      const shortLabel = bucket.shortLabel;
+      const displayLabel =
+        effectiveAggregation === 'quarter'
+          ? bucket.label
+          : sortedKeys.length > 5
+          ? bucket.shortLabel
+          : bucket.label;
 
-      // Calculate distinct team members active in this month
+      // Calculate distinct team members active in this interval
       const membersSet = new Set<string>();
       bucket.tasks.forEach((t) => {
         if (t.Owner && t.Owner !== 'Unassigned') {
@@ -186,7 +232,7 @@ export const TimelineVisualization: React.FC = () => {
       const teamMembersList = Array.from(membersSet);
       const teamMembersCount = teamMembersList.length;
 
-      // Group tasks by project in this month
+      // Group tasks by project in this interval
       const projectDetails: Record<string, MonthlyProjectDetail> = {};
       let totalProgressSum = 0;
 
@@ -223,7 +269,7 @@ export const TimelineVisualization: React.FC = () => {
             : 0;
       });
 
-      // Check if this month has any highlighted tasks
+      // Check if this bucket has any highlighted tasks
       const isCurrentHighlightMonth =
         isCrossFiltering &&
         bucket.tasks.some((t) => highlightIds.includes(t.Task_ID));
@@ -232,6 +278,7 @@ export const TimelineVisualization: React.FC = () => {
         monthKey: key,
         monthLabel,
         shortLabel,
+        displayLabel,
         timestamp: d.getTime(),
         teamMembersCount,
         teamMembersList,
@@ -244,10 +291,8 @@ export const TimelineVisualization: React.FC = () => {
       allProjectsList.forEach((pName) => {
         const detail = projectDetails[pName];
         if (viewMode === 'stacked100') {
-          // 100% stacked effort share
           point[pName] = detail ? detail.effortSharePercent : 0;
         } else {
-          // Absolute sum of % completion
           point[pName] = detail ? detail.progressSum : 0;
         }
       });
@@ -260,12 +305,14 @@ export const TimelineVisualization: React.FC = () => {
       allProjects: allProjectsList,
       projectColorMap: colorMap,
       timelineSpan: {
-        start: startLabel || '',
-        end: endLabel || '',
-        totalMonths: sortedKeys.length,
+        start: startLabel,
+        end: endLabel,
+        totalMonths: totalMonthsSpan,
+        aggregation: effectiveAggregation,
+        isAutoScaled: isOver6Months && scaleMode === 'auto',
       },
     };
-  }, [dataset, highlightIds, isCrossFiltering, viewMode]);
+  }, [dataset, highlightIds, isCrossFiltering, viewMode, scaleMode]);
 
   if (chartData.length === 0) {
     return null;
@@ -296,8 +343,82 @@ export const TimelineVisualization: React.FC = () => {
           </p>
         </div>
 
-        {/* View Mode Toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        {/* Scale Mode & View Mode Controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {/* Responsive Scaling Badge & Toggle (Quarter vs Month) */}
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              background: 'rgba(255, 255, 255, 0.05)',
+              borderRadius: '6px',
+              padding: '2px',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setScaleMode('auto')}
+              style={{
+                background:
+                  scaleMode === 'auto'
+                    ? 'linear-gradient(135deg, #0284C7 0%, #2563EB 100%)'
+                    : 'transparent',
+                color: scaleMode === 'auto' ? '#FFFFFF' : '#94A3B8',
+                border: 'none',
+                padding: '3px 8px',
+                borderRadius: '4px',
+                fontSize: '0.7rem',
+                fontWeight: scaleMode === 'auto' ? 600 : 400,
+                cursor: 'pointer',
+              }}
+              title="Automatically aggregate by Quarter if data spans >6 months, else by Month"
+            >
+              Auto ({timelineSpan.aggregation === 'quarter' ? 'Quarter' : 'Month'})
+            </button>
+            <button
+              type="button"
+              onClick={() => setScaleMode('month')}
+              style={{
+                background:
+                  scaleMode === 'month'
+                    ? 'linear-gradient(135deg, #0284C7 0%, #2563EB 100%)'
+                    : 'transparent',
+                color: scaleMode === 'month' ? '#FFFFFF' : '#94A3B8',
+                border: 'none',
+                padding: '3px 8px',
+                borderRadius: '4px',
+                fontSize: '0.7rem',
+                fontWeight: scaleMode === 'month' ? 600 : 400,
+                cursor: 'pointer',
+              }}
+              title="Aggregate timeline by Month"
+            >
+              Month
+            </button>
+            <button
+              type="button"
+              onClick={() => setScaleMode('quarter')}
+              style={{
+                background:
+                  scaleMode === 'quarter'
+                    ? 'linear-gradient(135deg, #0284C7 0%, #2563EB 100%)'
+                    : 'transparent',
+                color: scaleMode === 'quarter' ? '#FFFFFF' : '#94A3B8',
+                border: 'none',
+                padding: '3px 8px',
+                borderRadius: '4px',
+                fontSize: '0.7rem',
+                fontWeight: scaleMode === 'quarter' ? 600 : 400,
+                cursor: 'pointer',
+              }}
+              title="Aggregate timeline by Quarter (Q1-Q4)"
+            >
+              Quarter
+            </button>
+          </div>
+
+          {/* View Mode Toggle: 100% Stacked vs Progress Sum */}
           <div
             style={{
               display: 'inline-flex',
@@ -324,7 +445,7 @@ export const TimelineVisualization: React.FC = () => {
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
               }}
-              title="100% Stacked Column view of relative monthly progress share"
+              title="100% Stacked Column view of relative progress share"
             >
               100% Stacked
             </button>
@@ -345,7 +466,7 @@ export const TimelineVisualization: React.FC = () => {
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
               }}
-              title="Absolute sum of % completion stacked per month"
+              title="Absolute sum of % completion stacked"
             >
               Progress Sum
             </button>
@@ -417,12 +538,17 @@ export const TimelineVisualization: React.FC = () => {
               vertical={false}
             />
 
-            {/* X-Axis: Chronological Months */}
+            {/* X-Axis: Chronological Responsive Scale (Quarter / Month) */}
             <XAxis
-              dataKey="monthLabel"
+              dataKey="displayLabel"
               stroke="#64748B"
-              fontSize={10.5}
+              fontSize={10}
               tickLine={false}
+              interval={0}
+              angle={chartData.length > 5 ? -18 : 0}
+              textAnchor={chartData.length > 5 ? 'end' : 'middle'}
+              height={chartData.length > 5 ? 38 : 26}
+              tick={{ fill: '#94A3B8', fontSize: 10 }}
               axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
             />
 

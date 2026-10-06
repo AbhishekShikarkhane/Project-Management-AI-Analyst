@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   BarChart,
   Bar,
@@ -32,9 +32,11 @@ import {
   Calendar,
   ShieldAlert,
   User,
+  Search,
 } from 'lucide-react';
 import { useData, formatCompactCurrency } from '@/context/DataContext';
 import { TimelineVisualization } from './TimelineVisualization';
+import { GanttChartVisualization } from './GanttChartVisualization';
 
 export const getStatusColor = (status: string): string => {
   const s = (status || '').toLowerCase();
@@ -312,6 +314,7 @@ interface VisualDashboardProps {
 export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }) => {
   const {
     dataset,
+    rawDataset,
     summary,
     highlightIds,
     clearHighlights,
@@ -319,10 +322,44 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
     fileName,
     resetToDefault,
     generateLiveData,
+    loadPortfolioData,
     isGenerating,
+    filters,
+    activeDepartment,
+    activeStatus,
+    activeRiskLevel,
+    activeProject,
+    setActiveDepartment,
+    setActiveStatus,
+    setActiveRiskLevel,
+    setActiveProject,
+    toggleFilter,
+    clearAllFilters,
+    hasActiveFilters,
   } = useData();
 
   const isCrossFiltering = highlightIds.length > 0;
+
+  // Unique filter option lists from dataset
+  const availableDepartments = useMemo(() => {
+    const set = new Set<string>();
+    rawDataset.forEach((t) => {
+      if (t.Department) set.add(t.Department);
+    });
+    return Array.from(set).sort();
+  }, [rawDataset]);
+
+  const availableStatuses = useMemo(() => {
+    const set = new Set<string>();
+    rawDataset.forEach((t) => {
+      if (t.Status) set.add(t.Status);
+    });
+    const defaults = ['Completed', 'In Progress', 'Blocked', 'In Review', 'Planned'];
+    defaults.forEach((s) => set.add(s));
+    return Array.from(set);
+  }, [rawDataset]);
+
+  const availableRiskLevels = ['Critical', 'High', 'Medium', 'Low'];
 
   // Find highlighted tasks objects
   const highlightedTasks = useMemo(() => {
@@ -330,9 +367,26 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
     return dataset.filter((t) => highlightIds.includes(t.Task_ID));
   }, [dataset, highlightIds, isCrossFiltering]);
 
+  // Component-level pagination for Main Tasks Table (15 rows per page)
+  const [tablePage, setTablePage] = useState(1);
+  const TABLE_PAGE_SIZE = 15;
+  const displayTasks = isCrossFiltering ? highlightedTasks : dataset;
+  const totalTablePages = Math.max(1, Math.ceil(displayTasks.length / TABLE_PAGE_SIZE));
+  const paginatedTableTasks = useMemo(() => {
+    const start = (tablePage - 1) * TABLE_PAGE_SIZE;
+    return displayTasks.slice(start, start + TABLE_PAGE_SIZE);
+  }, [displayTasks, tablePage]);
+
+  useEffect(() => {
+    if (tablePage > totalTablePages) {
+      setTablePage(1);
+    }
+  }, [totalTablePages, tablePage]);
+
   // Financial status chart data (Spent mapped to slice sizes)
   const statusData = useMemo(() => {
     return summary.statusCounts.map((item) => {
+      const isSelected = activeStatus?.toLowerCase() === item.status?.toLowerCase();
       const isHighlighted =
         isCrossFiltering &&
         dataset.some(
@@ -343,15 +397,25 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
       return {
         ...item,
         color: getStatusColor(item.status),
+        isSelected,
         isHighlighted,
-        opacity: !isCrossFiltering ? 1 : isHighlighted ? 1 : 0.25,
+        opacity: activeStatus
+          ? isSelected
+            ? 1
+            : 0.25
+          : !isCrossFiltering
+          ? 1
+          : isHighlighted
+          ? 1
+          : 0.25,
       };
     });
-  }, [summary.statusCounts, highlightIds, isCrossFiltering, dataset]);
+  }, [summary.statusCounts, highlightIds, isCrossFiltering, dataset, activeStatus]);
 
   // Initiative budget utilization data (grouped by Department & Project Name)
   const projectBudgetData = useMemo(() => {
     return summary.projectBudgets.map((item) => {
+      const isSelected = activeProject?.toLowerCase() === item.project.toLowerCase();
       const isHighlighted =
         isCrossFiltering &&
         dataset.some(
@@ -370,15 +434,40 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
         spendPortion,
         remaining,
         overSpend,
+        isSelected,
         isHighlighted,
-        opacity: !isCrossFiltering ? 1 : isHighlighted ? 1 : 0.25,
+        opacity: activeProject
+          ? isSelected
+            ? 1
+            : 0.25
+          : !isCrossFiltering
+          ? 1
+          : isHighlighted
+          ? 1
+          : 0.25,
       };
     });
-  }, [summary.projectBudgets, highlightIds, isCrossFiltering, dataset]);
+  }, [summary.projectBudgets, highlightIds, isCrossFiltering, dataset, activeProject]);
+
+  // Component-level pagination for Budget Utilization Chart (15 initiatives per page)
+  const [budgetPage, setBudgetPage] = useState(1);
+  const BUDGET_PAGE_SIZE = 15;
+  const totalBudgetPages = Math.max(1, Math.ceil(projectBudgetData.length / BUDGET_PAGE_SIZE));
+  const paginatedBudgetData = useMemo(() => {
+    const start = (budgetPage - 1) * BUDGET_PAGE_SIZE;
+    return projectBudgetData.slice(start, start + BUDGET_PAGE_SIZE);
+  }, [projectBudgetData, budgetPage]);
+
+  useEffect(() => {
+    if (budgetPage > totalBudgetPages) {
+      setBudgetPage(1);
+    }
+  }, [totalBudgetPages, budgetPage]);
 
   // Department distribution data
   const deptData = useMemo(() => {
     return summary.departmentDistribution.map((item, idx) => {
+      const isSelected = activeDepartment?.toLowerCase() === item.name?.toLowerCase();
       const isHighlighted =
         isCrossFiltering &&
         dataset.some(
@@ -389,11 +478,20 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
       return {
         ...item,
         color: DEPT_COLORS[idx % DEPT_COLORS.length],
+        isSelected,
         isHighlighted,
-        opacity: !isCrossFiltering ? 1 : isHighlighted ? 1 : 0.25,
+        opacity: activeDepartment
+          ? isSelected
+            ? 1
+            : 0.25
+          : !isCrossFiltering
+          ? 1
+          : isHighlighted
+          ? 1
+          : 0.25,
       };
     });
-  }, [summary.departmentDistribution, highlightIds, isCrossFiltering, dataset]);
+  }, [summary.departmentDistribution, highlightIds, isCrossFiltering, dataset, activeDepartment]);
 
   // Placeholder when no dataset is present
   if (dataset.length === 0) {
@@ -405,45 +503,98 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           </div>
           <h3>Please Upload a Dataset</h3>
           <p>
-            No active project dataset is currently loaded in memory. Upload a CSV or JSON file
-            to populate the real-time status charts, budgets, and departmental metrics.
+            No active project dataset is currently loaded in memory. Upload a custom CSV/JSON file,
+            generate dynamic AI tasks, or instantly load the comprehensive 100-project portfolio dataset.
           </p>
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center', marginBottom: '16px' }}>
+            {/* Primary Action: Permanently Hardcoded 100-Project Portfolio */}
             <button
+              id="btn-empty-load-portfolio"
               type="button"
               className="btn-primary"
-              style={{ width: 'auto', padding: '10px 20px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-              onClick={onOpenUpload}
+              style={{
+                width: 'auto',
+                padding: '11px 22px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                background: 'linear-gradient(135deg, #0284C7 0%, #4F46E5 100%)',
+                boxShadow: '0 4px 16px rgba(2, 132, 199, 0.4)',
+                fontWeight: 600,
+                fontSize: '0.9rem',
+              }}
+              onClick={() => loadPortfolioData(150)}
+              title="Load deterministic 150-project portfolio with all PM edge cases (10% blocked, 15% budget overruns, schedule slippage, resource bottlenecks)"
             >
-              <UploadCloud size={16} />
-              <span>Upload CSV / JSON</span>
+              <Layers size={17} />
+              <span>Load 150-Project Portfolio</span>
             </button>
+
+            {/* File Upload Button */}
             <button
+              id="btn-empty-upload"
               type="button"
               className="btn-icon"
               style={{
-                padding: '10px 18px',
+                padding: '11px 20px',
+                background: 'rgba(99, 102, 241, 0.15)',
+                borderColor: 'rgba(99, 102, 241, 0.4)',
+                color: '#C7D2FE',
+                fontWeight: 500,
+                fontSize: '0.88rem',
+              }}
+              onClick={onOpenUpload}
+              title="Upload custom CSV or JSON project file"
+            >
+              <UploadCloud size={16} color="#818CF8" />
+              <span>Upload CSV / JSON</span>
+            </button>
+
+            {/* Live Data Generator (30 Tasks) */}
+            <button
+              id="btn-empty-generate-live"
+              type="button"
+              className="btn-icon"
+              style={{
+                padding: '11px 20px',
                 background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.16) 0%, rgba(6, 182, 212, 0.16) 100%)',
                 borderColor: 'rgba(16, 185, 129, 0.45)',
                 color: '#A7F3D0',
+                fontWeight: 500,
+                fontSize: '0.88rem',
               }}
               disabled={isGenerating}
               onClick={generateLiveData}
               title="Generate 30 realistic AI project tasks"
             >
-              <Sparkles size={15} color="#34D399" />
+              <Sparkles size={16} color="#34D399" />
               <span>{isGenerating ? 'Generating...' : 'Generate Live Data (30 Tasks)'}</span>
             </button>
-            <button
-              type="button"
-              className="btn-icon"
-              style={{ padding: '10px 18px' }}
-              onClick={resetToDefault}
-              title="Load the default local Project Management file"
-            >
-              <FileSpreadsheet size={15} color="#38BDF8" />
-              <span>Load Default File</span>
-            </button>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              gap: '8px',
+              flexWrap: 'wrap',
+              justifyContent: 'center',
+              fontSize: '0.78rem',
+              color: '#94A3B8',
+              marginTop: '4px',
+            }}
+          >
+            <span style={{ padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
+              ⚡ 10 Blocked & Critical Tasks
+            </span>
+            <span style={{ padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
+              💰 15 Budget Overruns (120-150%)
+            </span>
+            <span style={{ padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
+              👥 Overallocated Resource Bottlenecks
+            </span>
+            <span style={{ padding: '4px 10px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
+              📅 Interactive Gantt Chart
+            </span>
           </div>
         </div>
       </div>
@@ -452,29 +603,235 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
 
   return (
     <div className="visual-dashboard-container">
-      {/* Top Cross-Filtering Active Banner */}
-      {isCrossFiltering && (
-        <div className="filter-active-banner">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Sparkles size={16} color="#818CF8" />
-            <span>
-              <strong>{highlightIds.length}</strong> task
-              {highlightIds.length > 1 ? 's' : ''} highlighted by Analyst:{' '}
-              <span className="highlight-tag-list">
-                {highlightIds.slice(0, 4).join(', ')}
-                {highlightIds.length > 4 && ` +${highlightIds.length - 4} more`}
-              </span>
+      {/* 1. Global Dashboard Sticky Filter Bar */}
+      <div className="dashboard-filter-bar">
+        <div className="filter-controls-group">
+          {/* Department Dropdown */}
+          <select
+            id="filter-department-select"
+            className="filter-select"
+            value={activeDepartment || ''}
+            onChange={(e) => setActiveDepartment(e.target.value || null)}
+            title="Filter by Department"
+          >
+            <option value="">All Departments</option>
+            {availableDepartments.map((dept) => (
+              <option key={dept} value={dept}>
+                {dept}
+              </option>
+            ))}
+          </select>
+
+          {/* Status Dropdown */}
+          <select
+            id="filter-status-select"
+            className="filter-select"
+            value={activeStatus || ''}
+            onChange={(e) => setActiveStatus(e.target.value || null)}
+            title="Filter by Status"
+          >
+            <option value="">All Statuses</option>
+            {availableStatuses.map((st) => (
+              <option key={st} value={st}>
+                {st}
+              </option>
+            ))}
+          </select>
+
+          {/* Risk Level Dropdown */}
+          <select
+            id="filter-risk-select"
+            className="filter-select"
+            value={activeRiskLevel || ''}
+            onChange={(e) => setActiveRiskLevel(e.target.value || null)}
+            title="Filter by Risk Level"
+          >
+            <option value="">All Risk Levels</option>
+            {availableRiskLevels.map((risk) => (
+              <option key={risk} value={risk}>
+                {risk} Risk
+              </option>
+            ))}
+          </select>
+
+          {/* Project Name Text Search Input */}
+          <div className="filter-search-wrapper">
+            <Search size={14} className="filter-search-icon" />
+            <input
+              id="filter-project-input"
+              type="text"
+              className="filter-search-input"
+              placeholder="Search project name..."
+              value={filters.project || ''}
+              onChange={(e) => setActiveProject(e.target.value)}
+            />
+            {filters.project && (
+              <button
+                type="button"
+                className="filter-search-clear"
+                onClick={() => setActiveProject(null)}
+                title="Clear project search"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Filter Stats & Reset */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span
+            style={{
+              fontSize: '0.74rem',
+              color: '#38BDF8',
+              background: 'rgba(56, 189, 248, 0.1)',
+              padding: '3px 10px',
+              borderRadius: '12px',
+              border: '1px solid rgba(56, 189, 248, 0.25)',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Showing {dataset.length} of {rawDataset.length} Tasks
+          </span>
+
+          {(hasActiveFilters || isCrossFiltering) && (
+            <button
+              id="btn-clear-global-filters"
+              type="button"
+              className="btn-clear-filter"
+              onClick={clearAllFilters}
+              style={{ padding: '4px 10px', fontSize: '0.72rem' }}
+              title="Reset all filters"
+            >
+              <X size={12} />
+              <span>Clear Filters</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Portfolio Toolbar / Quick Control Bar */}
+      <div className="portfolio-control-bar">
+        <div className="portfolio-info-left">
+          <div className="portfolio-title-badge">
+            <Layers size={15} color="#38BDF8" />
+            <span style={{ fontWeight: 600, fontSize: '0.84rem', color: '#F1F5F9' }}>
+              Project Portfolio Dashboard
             </span>
+          </div>
+          <span style={{ fontSize: '0.74rem', color: '#94A3B8' }}>
+            {dataset.length} tasks • {summary.projects.length} projects • {summary.departments.length} departments
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            id="btn-dashboard-load-portfolio"
+            type="button"
+            className="btn-load-portfolio"
+            onClick={() => loadPortfolioData(150)}
+            title="Generate & load deterministic 150-row project portfolio with edge cases (blockers, overruns, slippage, bottlenecks)"
+          >
+            <Layers size={14} />
+            <span>Load 150-Project Portfolio</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Top Cross-Filtering Active Banner */}
+      {(hasActiveFilters || isCrossFiltering) && (
+        <div className="filter-active-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <Filter size={15} color="#38BDF8" />
+            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#F1F5F9' }}>
+              Active Filters:
+            </span>
+
+            {/* Department Filter Tag */}
+            {activeDepartment && (
+              <span className="active-filter-chip">
+                <span>Dept: {activeDepartment}</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveDepartment(null)}
+                  title="Clear department filter"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {/* Status Filter Tag */}
+            {activeStatus && (
+              <span className="active-filter-chip">
+                <span>Status: {activeStatus}</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveStatus(null)}
+                  title="Clear status filter"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {/* Project Filter Tag */}
+            {activeProject && (
+              <span className="active-filter-chip">
+                <span>Project: {activeProject}</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveProject(null)}
+                  title="Clear project filter"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {/* Risk Filter Tag */}
+            {activeRiskLevel && (
+              <span className="active-filter-chip">
+                <span>Risk: {activeRiskLevel}</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveRiskLevel(null)}
+                  title="Clear risk filter"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+
+            {/* Highlighted Tasks from Analyst */}
+            {isCrossFiltering && (
+              <span
+                className="active-filter-chip"
+                style={{ background: 'rgba(99, 102, 241, 0.25)', borderColor: '#818CF8' }}
+              >
+                <Sparkles size={11} color="#A5B4FC" />
+                <span>{highlightIds.length} Highlighted</span>
+                <button
+                  type="button"
+                  onClick={clearHighlights}
+                  title="Clear highlight cross-filtering"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
           </div>
 
           <button
+            id="btn-clear-all-filters"
             type="button"
             className="btn-clear-filter"
-            onClick={clearHighlights}
-            title="Reset highlight cross-filtering"
+            onClick={clearAllFilters}
+            title="Reset all active cross-filters and highlights"
           >
             <X size={13} />
-            <span>Clear Highlight</span>
+            <span>Clear Filters</span>
           </button>
         </div>
       )}
@@ -568,9 +925,23 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
             <PieIcon size={16} color="#38BDF8" />
             <h3 className="chart-title">Financial Spend by Task Status</h3>
           </div>
-          {isCrossFiltering && (
-            <span className="crossfilter-indicator">Cross-Filtering Active</span>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {activeStatus && (
+              <button
+                type="button"
+                className="btn-clear-filter"
+                onClick={() => setActiveStatus(null)}
+                style={{ padding: '2px 8px', fontSize: '0.68rem' }}
+                title="Reset status filter"
+              >
+                <X size={11} />
+                <span>Status: {activeStatus}</span>
+              </button>
+            )}
+            {isCrossFiltering && (
+              <span className="crossfilter-indicator">Cross-Filtering Active</span>
+            )}
+          </div>
         </div>
 
         <div style={{ position: 'relative', height: 210, width: '100%' }}>
@@ -585,14 +956,21 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
                 innerRadius={52}
                 outerRadius={80}
                 paddingAngle={3}
+                onClick={(entry: any) => {
+                  if (entry && entry.status) {
+                    setActiveStatus(entry.status);
+                  }
+                }}
               >
                 {statusData.map((entry, index) => (
                   <Cell
                     key={`status-donut-${index}`}
                     fill={entry.color}
                     fillOpacity={entry.opacity}
-                    stroke={entry.isHighlighted ? '#FFFFFF' : 'rgba(15, 23, 42, 0.8)'}
-                    strokeWidth={entry.isHighlighted ? 2.5 : 1.5}
+                    stroke={entry.isSelected ? '#FFFFFF' : entry.isHighlighted ? '#FFFFFF' : 'rgba(15, 23, 42, 0.8)'}
+                    strokeWidth={entry.isSelected ? 3 : entry.isHighlighted ? 2.5 : 1.5}
+                    style={{ cursor: 'pointer', outline: 'none' }}
+                    onClick={() => setActiveStatus(entry.status)}
                   />
                 ))}
               </Pie>
@@ -642,13 +1020,21 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           {statusData.map((entry) => (
             <div
               key={entry.status}
+              onClick={() => setActiveStatus(entry.status)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '5px',
                 fontSize: '0.71rem',
                 opacity: entry.opacity,
+                cursor: 'pointer',
+                padding: '3px 8px',
+                borderRadius: '4px',
+                background: entry.isSelected ? 'rgba(56, 189, 248, 0.18)' : 'transparent',
+                border: entry.isSelected ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid transparent',
+                transition: 'all 0.15s ease',
               }}
+              title={`Click to filter by Status: ${entry.status}`}
             >
               <span
                 style={{
@@ -687,11 +1073,23 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
                 lineHeight: 1.4,
               }}
             >
-              Horizontal progress bars by Department & Project. Dark Blue fills up the gray budget allocation.
+              Horizontal progress bars by Department & Project. Click any bar to cross-filter by project.
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {activeProject && (
+              <button
+                type="button"
+                className="btn-clear-filter"
+                onClick={() => setActiveProject(null)}
+                style={{ padding: '2px 8px', fontSize: '0.68rem' }}
+                title="Reset project filter"
+              >
+                <X size={11} />
+                <span>Project: {activeProject}</span>
+              </button>
+            )}
             <div
               style={{
                 display: 'flex',
@@ -755,100 +1153,156 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           </div>
         </div>
 
+        {/* Wrapper with strict max-h-[500px] and vertical scrolling */}
         <div
+          className="max-h-[500px] overflow-y-auto w-full"
           style={{
-            height: Math.max(260, projectBudgetData.length * 44),
+            maxHeight: '500px',
+            overflowY: 'auto',
             width: '100%',
           }}
         >
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              layout="vertical"
-              data={projectBudgetData}
-              margin={{ top: 8, right: 25, left: 18, bottom: 4 }}
-            >
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="rgba(255, 255, 255, 0.05)"
-                horizontal={false}
-              />
-              <XAxis
-                type="number"
-                stroke="#64748B"
-                fontSize={10}
-                tickLine={false}
-                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
-                tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
-              />
-              <YAxis
-                type="category"
-                dataKey="displayName"
-                stroke="#94A3B8"
-                fontSize={10}
-                tickLine={false}
-                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
-                width={155}
-                interval={0}
-                tick={<InitiativeYAxisTick />}
-              />
-              <Tooltip content={<BudgetBurnRateTooltip />} />
-
-              {/* Progress bar visual: Spent portion (Dark Blue) filling up Remaining Budget (Light Gray) */}
-              <Bar
-                dataKey="spendPortion"
-                name="Sum of Spent"
-                stackId="budgetProgress"
-                fill="#2563EB"
-                radius={[0, 0, 0, 0]}
+          <div
+            style={{
+              height: Math.max(260, paginatedBudgetData.length * 40),
+              width: '100%',
+            }}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                layout="vertical"
+                data={paginatedBudgetData}
+                margin={{ top: 8, right: 25, left: 18, bottom: 4 }}
+                onClick={(state: any) => {
+                  if (state && state.activePayload && state.activePayload[0]) {
+                    const p = state.activePayload[0].payload;
+                    if (p?.project) {
+                      setActiveProject(p.project);
+                    }
+                  }
+                }}
               >
-                {projectBudgetData.map((entry, idx) => (
-                  <Cell
-                    key={`sp-${idx}`}
-                    fill={entry.burnRate > 100 ? '#1D4ED8' : '#2563EB'}
-                    fillOpacity={entry.opacity}
-                    stroke={entry.isHighlighted ? '#FFFFFF' : 'transparent'}
-                    strokeWidth={entry.isHighlighted ? 2 : 0}
-                  />
-                ))}
-              </Bar>
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="rgba(255, 255, 255, 0.05)"
+                  horizontal={false}
+                />
+                <XAxis
+                  type="number"
+                  stroke="#64748B"
+                  fontSize={10}
+                  tickLine={false}
+                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="displayName"
+                  stroke="#94A3B8"
+                  fontSize={10}
+                  tickLine={false}
+                  axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
+                  width={155}
+                  interval={0}
+                  tick={<InitiativeYAxisTick />}
+                />
+                <Tooltip content={<BudgetBurnRateTooltip />} />
 
-              <Bar
-                dataKey="remaining"
-                name="Remaining Budget"
-                stackId="budgetProgress"
-                fill="rgba(255, 255, 255, 0.14)"
-                radius={[0, 3, 3, 0]}
-              >
-                {projectBudgetData.map((entry, idx) => (
-                  <Cell
-                    key={`rem-${idx}`}
-                    fill="rgba(255, 255, 255, 0.14)"
-                    fillOpacity={entry.opacity}
-                  />
-                ))}
-              </Bar>
+                {/* Progress bar visual: Spent portion (Dark Blue) filling up Remaining Budget (Light Gray) */}
+                <Bar
+                  dataKey="spendPortion"
+                  name="Sum of Spent"
+                  stackId="budgetProgress"
+                  fill="#2563EB"
+                  radius={[0, 0, 0, 0]}
+                >
+                  {paginatedBudgetData.map((entry, idx) => (
+                    <Cell
+                      key={`sp-${idx}`}
+                      fill={entry.burnRate > 100 ? '#1D4ED8' : '#2563EB'}
+                      fillOpacity={entry.opacity}
+                      stroke={entry.isSelected ? '#38BDF8' : entry.isHighlighted ? '#FFFFFF' : 'transparent'}
+                      strokeWidth={entry.isSelected ? 2.5 : entry.isHighlighted ? 2 : 0}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setActiveProject(entry.project)}
+                    />
+                  ))}
+                </Bar>
 
-              {/* Over Budget extension in red if initiative spend > budget */}
-              <Bar
-                dataKey="overSpend"
-                name="Over Budget Deficit"
-                stackId="budgetProgress"
-                fill="#EF4444"
-                radius={[0, 3, 3, 0]}
-              >
-                {projectBudgetData.map((entry, idx) => (
-                  <Cell
-                    key={`over-${idx}`}
-                    fill="#EF4444"
-                    fillOpacity={entry.opacity}
-                    stroke={entry.isHighlighted ? '#FFFFFF' : 'transparent'}
-                    strokeWidth={entry.isHighlighted ? 2 : 0}
-                  />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+                <Bar
+                  dataKey="remaining"
+                  name="Remaining Budget"
+                  stackId="budgetProgress"
+                  fill="rgba(255, 255, 255, 0.14)"
+                  radius={[0, 3, 3, 0]}
+                >
+                  {paginatedBudgetData.map((entry, idx) => (
+                    <Cell
+                      key={`rem-${idx}`}
+                      fill="rgba(255, 255, 255, 0.14)"
+                      fillOpacity={entry.opacity}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setActiveProject(entry.project)}
+                    />
+                  ))}
+                </Bar>
+
+                {/* Over Budget extension in red if initiative spend > budget */}
+                <Bar
+                  dataKey="overSpend"
+                  name="Over Budget Deficit"
+                  stackId="budgetProgress"
+                  fill="#EF4444"
+                  radius={[0, 3, 3, 0]}
+                >
+                  {paginatedBudgetData.map((entry, idx) => (
+                    <Cell
+                      key={`over-${idx}`}
+                      fill="#EF4444"
+                      fillOpacity={entry.opacity}
+                      stroke={entry.isSelected ? '#38BDF8' : entry.isHighlighted ? '#FFFFFF' : 'transparent'}
+                      strokeWidth={entry.isSelected ? 2.5 : entry.isHighlighted ? 2 : 0}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setActiveProject(entry.project)}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
+
+        {/* Pagination Bar for Budget Initiatives (15 per page) */}
+        {projectBudgetData.length > BUDGET_PAGE_SIZE && (
+          <div className="pagination-bar">
+            <span style={{ color: '#94A3B8' }}>
+              Showing {(budgetPage - 1) * BUDGET_PAGE_SIZE + 1} -{' '}
+              {Math.min(budgetPage * BUDGET_PAGE_SIZE, projectBudgetData.length)} of{' '}
+              {projectBudgetData.length} Initiatives
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                className="pagination-btn"
+                disabled={budgetPage === 1}
+                onClick={() => setBudgetPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <span style={{ color: '#F1F5F9', fontWeight: 600 }}>
+                Page {budgetPage} of {totalBudgetPages}
+              </span>
+              <button
+                type="button"
+                className="pagination-btn"
+                disabled={budgetPage >= totalBudgetPages}
+                onClick={() => setBudgetPage((p) => Math.min(totalBudgetPages, p + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Chart 3: Department Breakdown (Pie Chart) */}
@@ -858,6 +1312,18 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
             <PieIcon size={16} color="#06B6D4" />
             <h3 className="chart-title">Tasks by Department</h3>
           </div>
+          {activeDepartment && (
+            <button
+              type="button"
+              className="btn-clear-filter"
+              onClick={() => setActiveDepartment(null)}
+              style={{ padding: '2px 8px', fontSize: '0.68rem' }}
+              title="Reset department filter"
+            >
+              <X size={11} />
+              <span>Dept: {activeDepartment}</span>
+            </button>
+          )}
         </div>
 
         <div style={{ height: 180, width: '100%' }}>
@@ -872,14 +1338,21 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
                 outerRadius={65}
                 innerRadius={35}
                 paddingAngle={3}
+                onClick={(entry: any) => {
+                  if (entry && entry.name) {
+                    setActiveDepartment(entry.name);
+                  }
+                }}
               >
                 {deptData.map((entry, index) => (
                   <Cell
                     key={`dept-${index}`}
                     fill={entry.color}
                     fillOpacity={entry.opacity}
-                    stroke={entry.isHighlighted ? '#FFFFFF' : 'transparent'}
-                    strokeWidth={entry.isHighlighted ? 2 : 0}
+                    stroke={entry.isSelected ? '#FFFFFF' : entry.isHighlighted ? '#FFFFFF' : 'transparent'}
+                    strokeWidth={entry.isSelected ? 3 : entry.isHighlighted ? 2 : 0}
+                    style={{ cursor: 'pointer', outline: 'none' }}
+                    onClick={() => setActiveDepartment(entry.name)}
                   />
                 ))}
               </Pie>
@@ -893,8 +1366,23 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
                 }}
               />
               <Legend
+                onClick={(e: any) => {
+                  if (e && e.value) {
+                    setActiveDepartment(e.value);
+                  }
+                }}
                 formatter={(value) => (
-                  <span style={{ color: '#CBD5E1', fontSize: '11px' }}>{value}</span>
+                  <span
+                    style={{
+                      color: activeDepartment?.toLowerCase() === value?.toLowerCase() ? '#38BDF8' : '#CBD5E1',
+                      fontWeight: activeDepartment?.toLowerCase() === value?.toLowerCase() ? 700 : 500,
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                    }}
+                    title={`Click to filter by Department: ${value}`}
+                  >
+                    {value}
+                  </span>
                 )}
               />
             </PieChart>
@@ -928,7 +1416,8 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           </span>
         </div>
 
-        <div className="table-scroll-container" style={{ maxHeight: '400px' }}>
+        {/* Wrapper with strict max-h-[500px] and vertical scrolling */}
+        <div className="table-scroll-container max-h-[500px] overflow-y-auto" style={{ maxHeight: '500px', overflowY: 'auto' }}>
           <table className="dashboard-table">
             <thead>
               <tr>
@@ -946,7 +1435,7 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
               </tr>
             </thead>
             <tbody>
-              {(isCrossFiltering ? highlightedTasks : dataset).map((task) => {
+              {paginatedTableTasks.map((task) => {
                 const isSelected = highlightIds.includes(task.Task_ID);
                 const manager = task.Project_Manager || task.Owner || 'Unassigned';
                 const startDateStr =
@@ -1114,7 +1603,42 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
             </tbody>
           </table>
         </div>
+
+        {/* Component-Level Pagination Bar for Tasks Table (15 rows per page) */}
+        {displayTasks.length > TABLE_PAGE_SIZE && (
+          <div className="pagination-bar">
+            <span style={{ color: '#94A3B8' }}>
+              Showing {(tablePage - 1) * TABLE_PAGE_SIZE + 1} -{' '}
+              {Math.min(tablePage * TABLE_PAGE_SIZE, displayTasks.length)} of{' '}
+              {displayTasks.length} Tasks
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                className="pagination-btn"
+                disabled={tablePage === 1}
+                onClick={() => setTablePage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <span style={{ color: '#F1F5F9', fontWeight: 600 }}>
+                Page {tablePage} of {totalTablePages}
+              </span>
+              <button
+                type="button"
+                className="pagination-btn"
+                disabled={tablePage >= totalTablePages}
+                onClick={() => setTablePage((p) => Math.min(totalTablePages, p + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Gantt Chart Component at the bottom of the dashboard layout */}
+      <GanttChartVisualization />
     </div>
   );
 };

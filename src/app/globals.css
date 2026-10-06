@@ -1366,6 +1366,223 @@ body::after {
   color: #94A3B8;
 }
 
+/* Portfolio Control Bar */
+.portfolio-control-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+.portfolio-info-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.portfolio-title-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 6px;
+}
+
+.btn-load-portfolio {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.22) 0%, rgba(99, 102, 241, 0.22) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  border-radius: var(--radius-md);
+  color: #38BDF8;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(14, 165, 233, 0.2);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-load-portfolio:hover {
+  background: linear-gradient(135deg, #0284C7 0%, #6366F1 100%);
+  color: #FFFFFF;
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(56, 189, 248, 0.45);
+}
+
+.btn-load-portfolio:active {
+  transform: translateY(0);
+}
+
+/* Active Filter Chips */
+.active-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 6px;
+  color: #38BDF8;
+  font-size: 0.74rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.active-filter-chip button {
+  background: transparent;
+  border: none;
+  color: #94A3B8;
+  cursor: pointer;
+  padding: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.active-filter-chip button:hover {
+  color: #FFFFFF;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Gantt Chart View Mode Selector */
+.view-mode-btn {
+  background: transparent;
+  border: none;
+  color: #94A3B8;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-mode-btn:hover {
+  color: #FFFFFF;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.view-mode-btn.active {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38BDF8;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+/* Gantt Chart Dark Theme Overrides & Visual Timeline Grid */
+.gantt-scroll-wrapper {
+  background: rgba(11, 19, 43, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  padding: 0;
+}
+
+/* Ensure Gantt main flex wrapper fills the container */
+.gantt-card-wrapper ._3eULf,
+.gantt-scroll-wrapper div[tabindex="0"] {
+  display: flex !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  align-items: stretch !important;
+  background: #0B132B !important;
+  outline: none !important;
+}
+
+/* Ensure the graphical timeline grid takes up the remaining width on the right */
+.gantt-card-wrapper ._CZjuD,
+.gantt-card-wrapper div[dir="ltr"] {
+  flex: 1 1 0% !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  background: #080D1F !important;
+}
+
+/* Timeline Horizontal SVG container */
+.gantt-card-wrapper ._2B2zv {
+  overflow-x: visible !important;
+}
+
+/* Custom scrollbars inside the Gantt timeline */
+.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.8);
+}
+
+.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.35);
+  border-radius: 4px;
+}
+
+.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.6);
+}
+
+.gantt-scroll-wrapper svg {
+  background: transparent !important;
+}
+
+.gantt-scroll-wrapper text {
+  fill: #CBD5E1 !important;
+  font-family: inherit !important;
+  font-size: 11px !important;
+}
+
+.gantt-scroll-wrapper line {
+  stroke: rgba(255, 255, 255, 0.08) !important;
+}
+
+.gantt-scroll-wrapper rect[fill="#fff"],
+.gantt-scroll-wrapper rect[fill="#ffffff"],
+.gantt-scroll-wrapper rect[fill="white"] {
+  fill: #0B132B !important;
+}
+
+.gantt-scroll-wrapper rect[fill="#f5f5f5"] {
+  fill: #0F172A !important;
+}
+
+.gantt-scroll-wrapper div[class*="taskListTable"] {
+  background: #0B132B !important;
+  color: #E2E8F0 !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.gantt-scroll-wrapper div[class*="taskListHeader"] {
+  background: #080D1F !important;
+  color: #94A3B8 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+  font-weight: 600 !important;
+}
+
+.gantt-scroll-wrapper div[class*="taskListTableRow"] {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important;
+  color: #F1F5F9 !important;
+}
+
+.gantt-scroll-wrapper div[class*="taskListTableRow"]:hover {
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .app-layout {
@@ -1384,5 +1601,147 @@ body::after {
   .visual-kpi-row {
     grid-template-columns: repeat(2, 1fr);
   }
+  .portfolio-control-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
 }
+
+/* Sticky Dashboard Filter Bar */
+.dashboard-filter-bar {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+  background: rgba(11, 19, 43, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.filter-controls-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.filter-select {
+  background: #0D1630;
+  color: #F1F5F9;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 130px;
+}
+
+.filter-select:hover,
+.filter-select:focus {
+  border-color: #38BDF8;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+
+.filter-select option {
+  background: #0B132B;
+  color: #F1F5F9;
+}
+
+.filter-search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 170px;
+  flex: 1;
+  max-width: 260px;
+}
+
+.filter-search-input {
+  width: 100%;
+  background: #0D1630;
+  color: #F1F5F9;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 6px 28px 6px 28px;
+  font-size: 0.78rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.filter-search-input:focus {
+  border-color: #38BDF8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+}
+
+.filter-search-icon {
+  position: absolute;
+  left: 8px;
+  pointer-events: none;
+  color: #64748B;
+}
+
+.filter-search-clear {
+  position: absolute;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: #94A3B8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.filter-search-clear:hover {
+  color: #F1F5F9;
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.76rem;
+  background: rgba(15, 23, 42, 0.35);
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+}
+
+.pagination-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #E2E8F0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #38BDF8;
+}
+
+.pagination-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 
