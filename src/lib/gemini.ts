@@ -1,5 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { ProjectTask } from './dataset';
+import {
+  extractDeterministicFacts,
+  auditDataQuality,
+  analyzeSchedule,
+  analyzeResources,
+} from './analytics';
 import fs from 'fs';
 import path from 'path';
 
@@ -51,6 +57,10 @@ You must respond ONLY with a valid JSON object matching this exact schema:
   "highlight_ids": ["task_id_1", "task_id_2"]
 }
 
+CRITICAL MATHEMATICAL GROUNDING RULE:
+You MUST cite the verified deterministic calculation figures provided in the prompt section "VERIFIED DETERMINISTIC ANALYTICAL CALCULATIONS".
+Do NOT perform ad-hoc mental addition or approximation of budgets, spending, or averages. If asked for total budget, actual spend, or average progress, quote the exact verified numbers provided.
+
 ANALYST CAPABILITIES ON GRANULAR PROJECT DATA:
 - Deadline Forecasting: Utilize Start_Date, End_Date, and Progress_Percent to assess timeline health and project delay risks. Highlight tasks with high priority, low progress, or looming end dates.
 - Resource Bottlenecks: Analyze Number_of_Team_Members, Project_Manager, and Department allocations. Identify individuals or teams that are over-allocated or constrained.
@@ -67,13 +77,20 @@ HIGHLIGHT RULES:
 }
 
 /**
- * Builds the bundled prompt combining strict analyst directives, the JSON dataset, and user conversation
+ * Builds the bundled prompt combining strict analyst directives, the JSON dataset, verified deterministic math, and user conversation
  */
 function buildBundledPrompt(
   question: string,
   records: ProjectTask[],
   conversationHistory: ChatMessage[] = []
 ): string {
+  const deterministicFacts = extractDeterministicFacts(question, records);
+  const dataQuality = auditDataQuality(records);
+
+  const analyticalFacts = [
+    `Data Quality Compliance: ${dataQuality.complianceRatePercent}% clean records (${dataQuality.totalIssuesCount} validation issues identified)`,
+  ];
+
   // Strip sensitive info if needed and prepare lightweight, enriched JSON payload
   const lightweightRecords = records.map((r) => ({
     Task_ID: r.Task_ID,
@@ -111,7 +128,18 @@ function buildBundledPrompt(
       `\n---------------------------\n`;
   }
 
+  const verifiedMathSection = `
+=== VERIFIED DETERMINISTIC ANALYTICAL CALCULATIONS (SINGLE SOURCE OF TRUTH) ===
+CRITICAL: These figures are pre-computed directly from the database using certified business logic identical to the dashboard.
+You MUST use these EXACT numerical figures when stating totals, averages, variances, and forecasts. Do NOT attempt to mental-math or re-aggregate:
+${deterministicFacts.contextFacts.map((f) => `- ${f}`).join('\n')}
+${analyticalFacts.map((f) => `- ${f}`).join('\n')}
+================================================================================
+`.trim();
+
   return `
+${verifiedMathSection}
+
 === VERIFIED DATASET PAYLOAD ===
 Total Records: ${records.length}
 JSON Array:
@@ -137,6 +165,9 @@ function parseAnalystResponse(rawText: string): AnalystResponse {
     if (obj && typeof obj.text_response === 'string') {
       text_response = obj.text_response;
       highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
+    } else if (obj && typeof obj.answer === 'string') {
+      text_response = obj.answer;
+      highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
     }
   } catch {}
 
@@ -148,6 +179,9 @@ function parseAnalystResponse(rawText: string): AnalystResponse {
         const obj = JSON.parse(jsonMatch[1]);
         if (obj && typeof obj.text_response === 'string') {
           text_response = obj.text_response;
+          highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
+        } else if (obj && typeof obj.answer === 'string') {
+          text_response = obj.answer;
           highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
         }
       } catch {}
@@ -165,14 +199,54 @@ function parseAnalystResponse(rawText: string): AnalystResponse {
         if (obj && typeof obj.text_response === 'string') {
           text_response = obj.text_response;
           highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
+        } else if (obj && typeof obj.answer === 'string') {
+          text_response = obj.answer;
+          highlight_ids = Array.isArray(obj.highlight_ids) ? obj.highlight_ids.map(String) : [];
         }
       } catch {}
+    }
+  }
+
+  // Resilient regex and marker unwrap if text_response still looks like a JSON wrapper or was unclosed
+  if (
+    !text_response ||
+    text_response.includes('"text_response"') ||
+    text_response.includes('"answer"') ||
+    text_response.trim().startsWith('{')
+  ) {
+    const target = (text_response || trimmed).trim();
+    const markerMatch = target.match(/"(?:text_response|answer)"\s*:\s*"/);
+    if (markerMatch && markerMatch.index !== undefined) {
+      const startIndex = markerMatch.index + markerMatch[0].length;
+      let extracted = target.slice(startIndex);
+      const endMatch = extracted.match(/"(?:\s*,\s*"highlight_ids"|\s*\}|\s*$)/);
+      if (endMatch && endMatch.index !== undefined) {
+        extracted = extracted.slice(0, endMatch.index);
+      } else if (extracted.endsWith('"}') || extracted.endsWith('"\n}')) {
+        extracted = extracted.replace(/"\s*\}\s*$/, '');
+      } else if (extracted.endsWith('"')) {
+        extracted = extracted.slice(0, -1);
+      }
+      text_response = extracted;
+    } else if (target.startsWith('{') && target.endsWith('}')) {
+      text_response = target.slice(1, -1).trim();
     }
   }
 
   // Fallback: raw text without structured JSON
   if (!text_response) {
     text_response = trimmed;
+  }
+
+  // Final unescape pass for literal \n sequences if present
+  if (text_response.includes('\\n')) {
+    text_response = text_response.replace(/\\n/g, '\n');
+  }
+  if (text_response.includes('\\"')) {
+    text_response = text_response.replace(/\\"/g, '"');
+  }
+  if (text_response.includes('\\r')) {
+    text_response = text_response.replace(/\\r/g, '');
   }
 
   // Automatic Task ID extraction if highlight_ids is empty
@@ -190,7 +264,155 @@ function parseAnalystResponse(rawText: string): AnalystResponse {
 }
 
 /**
- * Calls the Gemini API with the bundled prompt
+ * Generates a deterministic, database-grounded response when the AI provider is unavailable
+ * or offline, fulfilling strict reliability requirements (Test Case 12).
+ */
+export function generateDeterministicFallbackResponse(
+  question: string,
+  records: ProjectTask[]
+): AnalystResponse {
+  if (!records || records.length === 0) {
+    return {
+      text_response:
+        'No project records are available in the current dataset. Please upload a dataset or configure project data to perform analysis.',
+      highlight_ids: [],
+    };
+  }
+
+  const facts = extractDeterministicFacts(question, records);
+  const { summary, varianceAnalysis, relevantTasks, contextFacts } = facts;
+  const qLower = question.toLowerCase();
+
+  let text = '';
+  let highlightIds = relevantTasks.map((t) => t.Task_ID).filter(Boolean);
+
+  // Dedicated Budget Variance & Over-Budget Analysis (Priority 2)
+  if (
+    qLower.includes('variance') ||
+    qLower.includes('over budget') ||
+    qLower.includes('overrun') ||
+    qLower.includes('exceed') ||
+    qLower.includes('exceeding')
+  ) {
+    const { portfolio, overBudgetProjects, overBudgetTasks } = varianceAnalysis;
+    text =
+      `### Executive Budget Variance Analysis\n\n` +
+      `- **Total Portfolio Budget:** $${portfolio.totalBudget.toLocaleString()}\n` +
+      `- **Total Actual Spend:** $${portfolio.totalSpend.toLocaleString()}\n` +
+      `- **Net Portfolio Variance:** $${Math.abs(portfolio.netVariance).toLocaleString()} **${portfolio.isUnderBudget ? 'Under Budget (Surplus)' : 'Over Budget (Overrun)'}**\n` +
+      `- **Scope:** ${records.length} tasks across ${summary.projects.length} projects.\n\n` +
+      `> **Key Financial Rule:** An overall portfolio surplus does not prove that every individual project is under budget. ` +
+      (overBudgetProjects.length > 0
+        ? `While the overall portfolio maintains a **$${Math.abs(portfolio.netVariance).toLocaleString()}** net surplus, **${overBudgetProjects.length} project(s)** and **${overBudgetTasks.length} task(s)** are currently exceeding their allocations.\n\n`
+        : `All project initiatives are currently operating within their allocated budgets.\n\n`);
+
+    if (overBudgetProjects.length > 0) {
+      text +=
+        `#### Projects Exceeding Budget (${overBudgetProjects.length})\n\n` +
+        `| Project Name | Allocated Budget | Actual Spend | Overrun Amount | % Over Budget |\n` +
+        `|---|---|---|---|---|\n` +
+        overBudgetProjects
+          .map(
+            (p) =>
+              `| **${p.project}** | $${p.budget.toLocaleString()} | $${p.spend.toLocaleString()} | +$${p.overAmount.toLocaleString()} | **+${p.overPercentage}%** |`
+          )
+          .join('\n') +
+        `\n\n`;
+    } else {
+      text += `*No individual projects exceed their allocated budget at the aggregate project level.*\n\n`;
+    }
+
+    if (overBudgetTasks.length > 0) {
+      text +=
+        `#### Tasks Exceeding Budget (${overBudgetTasks.length} Total Overruns)\n\n` +
+        `| Task ID | Project | Task Title | Allocated | Actual Spend | Overrun | % Over |\n` +
+        `|---|---|---|---|---|---|---|\n` +
+        overBudgetTasks
+          .slice(0, 10)
+          .map(
+            (t) =>
+              `| \`${t.taskId}\` | ${t.project} | ${t.title} | $${t.budget.toLocaleString()} | $${t.spend.toLocaleString()} | +$${t.overAmount.toLocaleString()} | ${t.overPercentage !== null ? `+${t.overPercentage}%` : 'N/A'} |`
+          )
+          .join('\n') +
+        `\n\n`;
+    }
+  } else if (qLower.includes('data quality') || qLower.includes('compliance') || qLower.includes('missing data')) {
+    const quality = auditDataQuality(records);
+    text =
+      `### Data Quality & Integrity Audit\n\n` +
+      `- **Total Records Evaluated:** ${quality.totalRecordsChecked}\n` +
+      `- **Clean Records:** ${quality.cleanRecordsCount} (**${quality.complianceRatePercent}% compliance rate**)\n` +
+      `- **Missing / Invalid Dates:** ${quality.missingDatesCount}\n` +
+      `- **Invalid Progress Values:** ${quality.invalidProgressCount}\n` +
+      `- **Missing Budget Records:** ${quality.missingBudgetCount}\n` +
+      `- **Status / Progress Inconsistencies:** ${quality.inconsistentStatusProgressCount}\n` +
+      `- **Invalid Financials (Negative values):** ${quality.invalidFinancialsCount}\n\n` +
+      `*No records have been silently replaced with fabricated values.*`;
+  } else if (qLower.includes('budget') && !qLower.includes('over')) {
+    text =
+      `### Budget Analysis\n\n` +
+      `- **Total Allocated Budget:** $${summary.totalBudget.toLocaleString()}\n` +
+      `- **Total Actual Spend:** $${summary.totalSpend.toLocaleString()}\n` +
+      `- **Net Budget Variance:** $${(summary.totalBudget - summary.totalSpend).toLocaleString()} (${summary.totalBudget >= summary.totalSpend ? 'Under Budget' : 'Overrun'})\n` +
+      `- **Dataset Scope:** ${records.length} tasks across ${summary.projects.length} projects and ${summary.departments.length} departments.`;
+  } else if (qLower.includes('progress') || qLower.includes('average progress')) {
+    text =
+      `### Progress Summary\n\n` +
+      `- **Unweighted Average Progress:** ${summary.avgProgress}%\n` +
+      `- **Total Tasks Evaluated:** ${records.length}\n` +
+      `- **Completed Tasks:** ${summary.completedCount}\n` +
+      `- **In Progress Tasks:** ${summary.inProgressCount}\n` +
+      `- **Blocked Tasks:** ${summary.blockedCount}`;
+  } else if (qLower.includes('block') || qLower.includes('delay') || qLower.includes('risk')) {
+    text =
+      `### Blocked & Critical Risk Tasks\n\n` +
+      `- **Blocked Tasks Count:** ${summary.blockedCount}\n` +
+      `- **Critical Risk Tasks:** ${summary.criticalRiskCount}\n\n` +
+      (relevantTasks.length > 0
+        ? `| Task ID | Project | Title | Status | Risk |\n|---|---|---|---|---|\n` +
+          relevantTasks
+            .slice(0, 10)
+            .map(
+              (t) =>
+                `| ${t.Task_ID} | ${t.Project_Name} | ${t.Task_Title} | ${t.Status} | ${t.Risk_Level} |`
+            )
+            .join('\n')
+        : 'No tasks currently identified as blocked.');
+  } else if (qLower.includes('how many') || qLower.includes('count') || qLower.includes('task')) {
+    text =
+      `### Task Distribution Overview\n\n` +
+      `- **Total Tasks:** ${records.length}\n` +
+      `- **In Progress:** ${summary.inProgressCount}\n` +
+      `- **Completed:** ${summary.completedCount}\n` +
+      `- **Blocked:** ${summary.blockedCount}\n` +
+      `- **Total Allocated Budget:** $${summary.totalBudget.toLocaleString()}\n` +
+      `- **Total Actual Spend:** $${summary.totalSpend.toLocaleString()}`;
+  } else {
+    text =
+      `### Portfolio Overview\n\n` +
+      `- **Total Tasks:** ${records.length}\n` +
+      `- **Total Budget:** $${summary.totalBudget.toLocaleString()}\n` +
+      `- **Total Spend:** $${summary.totalSpend.toLocaleString()}\n` +
+      `- **Average Progress:** ${summary.avgProgress}%\n` +
+      `- **Blocked Tasks:** ${summary.blockedCount}\n\n` +
+      `**Verified Facts:**\n` +
+      contextFacts.map((f) => `- ${f}`).join('\n');
+  }
+
+  text += `\n\n*(Note: Explanatory AI service is currently operating in deterministic verification mode using authoritative database records.)*`;
+
+  if (highlightIds.length > 20) {
+    highlightIds = highlightIds.slice(0, 20);
+  }
+
+  return {
+    text_response: text,
+    highlight_ids: highlightIds,
+  };
+}
+
+/**
+ * Calls the Gemini API with the bundled prompt and deterministic facts
  */
 export async function queryGeminiDataAnalyst({
   question,
@@ -205,6 +427,15 @@ export async function queryGeminiDataAnalyst({
   conversationHistory?: ChatMessage[];
   modelName?: string;
 }): Promise<AnalystResponse> {
+  // 1. Handle empty dataset explicitly (Test Case 6)
+  if (!records || records.length === 0) {
+    return {
+      text_response:
+        'No project records are available in the current dataset. Please upload a dataset or configure project data to perform analysis.',
+      highlight_ids: [],
+    };
+  }
+
   const activeKey =
     apiKey?.trim() ||
     process.env.GEMINI_API_KEY ||
@@ -212,24 +443,19 @@ export async function queryGeminiDataAnalyst({
     process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 
   if (!activeKey) {
-    throw new Error(
-      'MISSING_API_KEY: Gemini API Key is required. Please set GEMINI_API_KEY in .env.local or enter your key in the UI settings.'
-    );
+    // If API key is not configured, gracefully return verified deterministic analysis
+    console.warn('Gemini API key not found. Providing deterministic factual analysis.');
+    return generateDeterministicFallbackResponse(question, records);
   }
 
   const bundledPrompt = buildBundledPrompt(question, records, conversationHistory);
   const systemInstruction = getSystemInstruction();
 
-  // Primary model candidates in verified priority including latest preview models
+  // Primary model candidates in verified priority
   const candidateModels = [
     modelName,
-    'gemini-3.1-pro-preview',
-    'gemini-3.5-flash',
-    'gemini-3.1-flash-lite-preview',
+    'gemini-2.5-flash',
     'gemini-flash-latest',
-    'gemini-3.8-flash',
-    'gemini-pro-latest',
-    'gemini-3.7-flash',
   ].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i) as string[];
 
   let lastError: Error | null = null;
@@ -243,7 +469,7 @@ export async function queryGeminiDataAnalyst({
         generationConfig: {
           temperature: 0.1,
           responseMimeType: 'application/json',
-          maxOutputTokens: 3000,
+          maxOutputTokens: 8192,
         },
       });
 
@@ -257,8 +483,16 @@ export async function queryGeminiDataAnalyst({
     } catch (err: any) {
       console.warn(`Gemini model ${modelId} error:`, err?.message || err);
       lastError = err;
-      if (err?.message?.includes('API_KEY_INVALID') || err?.message?.includes('403')) {
-        throw new Error('Invalid Gemini API Key. Please verify your API key in settings.');
+      if (
+        err?.message?.includes('API_KEY_INVALID') ||
+        err?.message?.includes('403') ||
+        err?.message?.includes('429') ||
+        err?.message?.includes('Quota') ||
+        err?.message?.includes('503') ||
+        err?.message?.includes('Service Unavailable')
+      ) {
+        // Immediately fall back to deterministic calculation with disclaimer
+        return generateDeterministicFallbackResponse(question, records);
       }
     }
   }
@@ -283,7 +517,7 @@ export async function queryGeminiDataAnalyst({
         generationConfig: {
           temperature: 0.1,
           responseMimeType: 'application/json',
-          maxOutputTokens: 3000,
+          maxOutputTokens: 8192,
         },
       }),
     });
@@ -299,8 +533,7 @@ export async function queryGeminiDataAnalyst({
     console.error('Direct Gemini REST fallback error:', directErr);
   }
 
-  throw new Error(
-    lastError?.message ||
-      'Failed to generate response from Gemini API. Please check your API key and network connection.'
-  );
+  // Gracefully handle AI-provider failure using deterministic analytical facts (Test Case 12)
+  console.warn('AI models unavailable; falling back to deterministic calculation.');
+  return generateDeterministicFallbackResponse(question, records);
 }

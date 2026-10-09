@@ -14,12 +14,72 @@ interface MessageItemProps {
   onHighlightClick?: (id: string) => void;
 }
 
+function normalizeMessageContent(content: any): string {
+  if (!content) return '';
+  if (typeof content !== 'string') {
+    if (typeof content === 'object') {
+      if (typeof content.answer === 'string') return normalizeMessageContent(content.answer);
+      if (typeof content.text_response === 'string') return normalizeMessageContent(content.text_response);
+      if (typeof content.response === 'string') return normalizeMessageContent(content.response);
+      return JSON.stringify(content, null, 2);
+    }
+    return String(content);
+  }
+
+  let text = content.trim();
+
+  // If text is a serialized or truncated JSON object containing text_response or answer, unwrap it cleanly
+  if (text.includes('"text_response"') || text.includes('"answer"') || text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.answer === 'string') {
+        return normalizeMessageContent(parsed.answer);
+      }
+      if (parsed && typeof parsed.text_response === 'string') {
+        return normalizeMessageContent(parsed.text_response);
+      }
+    } catch {
+      // Robust marker-based extraction if JSON was truncated or unclosed
+      const markerMatch = text.match(/"(?:text_response|answer)"\s*:\s*"/);
+      if (markerMatch && markerMatch.index !== undefined) {
+        const startIndex = markerMatch.index + markerMatch[0].length;
+        let extracted = text.slice(startIndex);
+        const endMatch = extracted.match(/"(?:\s*,\s*"highlight_ids"|\s*\}|\s*$)/);
+        if (endMatch && endMatch.index !== undefined) {
+          extracted = extracted.slice(0, endMatch.index);
+        } else if (extracted.endsWith('"}') || extracted.endsWith('"\n}')) {
+          extracted = extracted.replace(/"\s*\}\s*$/, '');
+        } else if (extracted.endsWith('"')) {
+          extracted = extracted.slice(0, -1);
+        }
+        text = extracted;
+      } else if (text.startsWith('{') && text.endsWith('}')) {
+        text = text.slice(1, -1).trim();
+      }
+    }
+  }
+
+  // Ensure escaped \n and \" characters become real newlines and quotes for paragraph and table splitting
+  if (text.includes('\\n')) {
+    text = text.replace(/\\n/g, '\n');
+  }
+  if (text.includes('\\"')) {
+    text = text.replace(/\\"/g, '"');
+  }
+  if (text.includes('\\r')) {
+    text = text.replace(/\\r/g, '');
+  }
+
+  return text;
+}
+
 export const MessageItem: React.FC<MessageItemProps> = ({ message, onHighlightClick }) => {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
+  const displayContent = normalizeMessageContent(message.content);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content);
+    navigator.clipboard.writeText(displayContent);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -28,7 +88,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onHighlightCl
    * Lightweight, robust parser for Markdown formatting into React elements:
    * Supports: Markdown tables, headers, lists, code blocks, bold, blockquotes.
    */
-  const renderFormattedMarkdown = (text: string) => {
+  const renderFormattedMarkdown = (rawText: string) => {
+    const text = normalizeMessageContent(rawText);
     const lines = text.split('\n');
     const elements: React.ReactNode[] = [];
     let inTable = false;
@@ -236,9 +297,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, onHighlightCl
 
         <div className={isUser ? '' : 'analyst-content'}>
           {isUser ? (
-            <p style={{ whiteSpace: 'pre-wrap' }}>{message.content}</p>
+            <p style={{ whiteSpace: 'pre-wrap' }}>{displayContent}</p>
           ) : (
-            renderFormattedMarkdown(message.content)
+            renderFormattedMarkdown(displayContent)
           )}
         </div>
 

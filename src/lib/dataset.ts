@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { generatePortfolioData, generateStressTestData } from './portfolioGenerator';
+import { calculateDatasetSummary } from './analytics';
 export { generatePortfolioData, generateStressTestData };
 
 export interface ProjectTask {
@@ -53,6 +54,154 @@ export interface DatasetInfo {
     departments: string[];
     projects: string[];
   };
+}
+
+/**
+ * Robust numerical sanitizer:
+ * Strips currency symbols ($), commas, percentage signs (%), and trailing labels
+ */
+export function cleanNumber(val: any, fallback: number = 0): number {
+  if (typeof val === 'number') {
+    return isNaN(val) ? fallback : val;
+  }
+  if (val === null || val === undefined) return fallback;
+  const str = String(val).replace(/[^0-9.-]/g, '').trim();
+  if (!str) return fallback;
+  const parsed = Number(str);
+  return isNaN(parsed) ? fallback : parsed;
+}
+
+/**
+ * Safely extracts raw Progress field from arbitrary record object formats:
+ * Checks 'Progress (%)', 'Progress %', 'Progress', 'progress', 'Progress_Percent',
+ * and fuzzy-matches columns containing 'progress' or 'completion'.
+ */
+export function extractRawProgress(r: any): any {
+  if (!r || typeof r !== 'object') return undefined;
+
+  const candidateKeys = [
+    'Progress (%)',
+    'progress (%)',
+    'Progress%',
+    'Progress %',
+    'progress %',
+    'Progress',
+    'progress',
+    '% Progress',
+    '% progress',
+    'progress_%',
+    'Progress_%',
+    'Completion (%)',
+    'Completion %',
+    'Completion',
+    'completion',
+    'Percent Complete',
+    'Percent_Complete',
+    '% Complete',
+    '% Completed',
+    'percent_complete',
+  ];
+
+  for (const key of candidateKeys) {
+    if (r[key] !== undefined && r[key] !== null && String(r[key]).trim() !== '') {
+      return r[key];
+    }
+  }
+
+  if (r.Progress_Percent !== undefined && r.Progress_Percent !== null && String(r.Progress_Percent).trim() !== '') {
+    const num = Number(r.Progress_Percent);
+    if (!isNaN(num) && num > 0) {
+      return r.Progress_Percent;
+    }
+  }
+
+  const keys = Object.keys(r);
+  for (const k of keys) {
+    const normalized = k.toLowerCase().replace(/[\s_\-()%]/g, '');
+    if (
+      normalized === 'progress' ||
+      normalized === 'progresspercent' ||
+      normalized === 'completion' ||
+      normalized === 'percentcomplete' ||
+      normalized === 'completedpercent'
+    ) {
+      if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
+        return r[k];
+      }
+    }
+  }
+
+  for (const k of keys) {
+    const lower = k.toLowerCase();
+    if (lower.includes('progress') || lower.includes('completion')) {
+      if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
+        return r[k];
+      }
+    }
+  }
+
+  if (r.Progress_Percent !== undefined && r.Progress_Percent !== null && String(r.Progress_Percent).trim() !== '') {
+    return r.Progress_Percent;
+  }
+
+  return undefined;
+}
+
+/**
+ * Robust Progress sanitizer:
+ * - Strips any '%' symbols, extra spaces, and trailing symbols
+ * - Correctly converts raw string representations to valid JavaScript Numbers
+ * - Handles decimal fraction representations (e.g. 0.45 or "0.45" -> 45%)
+ * - Clamps values between 0 and 100
+ * - Provides intelligent fallback: If status is 'Completed' and progress is 0 or unassigned,
+ *   safely marks as 100%. If status is 'In Progress' and progress is unassigned, provides 50%.
+ */
+export function cleanProgress(val: any, status?: string, fallback?: number): number {
+  const stLower = status ? String(status).toLowerCase().trim() : '';
+  const isCompleted = stLower.includes('complete') || stLower.includes('done');
+  const isInProgress = stLower.includes('progress') || stLower.includes('active') || stLower.includes('track');
+
+  if (val !== undefined && val !== null && String(val).trim() !== '') {
+    if (typeof val === 'number') {
+      if (!isNaN(val)) {
+        if (val > 0 && val < 1) {
+          return Math.round(val * 100);
+        }
+        if (val === 0 && isCompleted) {
+          return 100;
+        }
+        return Math.min(100, Math.max(0, Math.round(val)));
+      }
+    } else {
+      const rawStr = String(val).trim();
+      const stripped = rawStr.replace(/%/g, '').replace(/[^0-9.-]/g, '').trim();
+      if (stripped !== '') {
+        const parsed = Number(stripped);
+        if (!isNaN(parsed)) {
+          if (parsed > 0 && parsed < 1 && rawStr.includes('.') && !rawStr.includes('%')) {
+            return Math.round(parsed * 100);
+          }
+          if (parsed === 0 && isCompleted) {
+            return 100;
+          }
+          return Math.min(100, Math.max(0, Math.round(parsed)));
+        }
+      }
+    }
+  }
+
+  if (fallback !== undefined && fallback !== null && !isNaN(fallback)) {
+    return Math.min(100, Math.max(0, Math.round(fallback)));
+  }
+
+  if (isCompleted) {
+    return 100;
+  }
+  if (isInProgress) {
+    return 50;
+  }
+
+  return 0;
 }
 
 /**
@@ -128,7 +277,7 @@ function parseContentToJSON(rawContent: string): { records: ProjectTask[]; colum
       let val: any = values[colIndex] ?? '';
       val = typeof val === 'string' ? val.replace(/^["']|["']$/g, '').trim() : val;
 
-      // Smart numerical conversion for metrics
+      // Smart numerical conversion for metrics if raw string is numeric
       if (/^-?\d+(\.\d+)?$/.test(val)) {
         val = Number(val);
       }
@@ -136,32 +285,76 @@ function parseContentToJSON(rawContent: string): { records: ProjectTask[]; colum
       rowObj[header] = val;
     });
 
+    const status = String(rowObj.Status || rowObj.status || 'In Progress');
+    const rawProgress = extractRawProgress(rowObj);
+    const progressPercent = cleanProgress(rawProgress, status);
+
     // Provide normalized defaults for essential fields
     const task: ProjectTask = {
-      Task_ID: rowObj.Task_ID || rowObj.id || `TASK-${i}`,
-      Project_Name: rowObj.Project_Name || rowObj.project || 'General Project',
-      Task_Title: rowObj.Task_Title || rowObj.title || rowObj.task || `Task ${i}`,
+      Task_ID: rowObj.Task_ID || rowObj['Task ID'] || rowObj.id || `TASK-${i}`,
+      Project_Name: rowObj.Project_Name || rowObj['Project Name'] || rowObj.project || 'General Project',
+      Task_Title: rowObj.Task_Title || rowObj['Task Title'] || rowObj.title || rowObj.task || `Task ${i}`,
       Sprint: rowObj.Sprint || rowObj.sprint || 'Sprint 1',
-      Owner: rowObj.Owner || rowObj.assignee || 'Unassigned',
+      Owner: rowObj.Owner || rowObj['Owner / Project Manager'] || rowObj['Project Manager'] || rowObj.assignee || 'Unassigned',
       Department: rowObj.Department || rowObj.dept || 'Engineering',
       Priority: rowObj.Priority || rowObj.priority || 'Medium',
-      Status: rowObj.Status || rowObj.status || 'In Progress',
-      Progress_Percent: Number(rowObj.Progress_Percent ?? rowObj.progress ?? 0),
-      Estimated_Hours: Number(rowObj.Estimated_Hours ?? rowObj.estimated_hours ?? 0),
-      Actual_Hours: Number(rowObj.Actual_Hours ?? rowObj.actual_hours ?? 0),
-      Allocated_Budget_USD: Number(rowObj.Allocated_Budget_USD ?? rowObj.budget ?? 0),
-      Actual_Spend_USD: Number(rowObj.Actual_Spend_USD ?? rowObj.spent ?? 0),
-      Start_Date: rowObj.Start_Date || rowObj.start_date || '2026-08-01',
-      Due_Date: rowObj.Due_Date || rowObj.due_date || '2026-10-01',
-      Risk_Level: rowObj.Risk_Level || rowObj.risk || 'Low',
-      Blocker_Details: rowObj.Blocker_Details || rowObj.blocker || 'None',
+      Status: status,
+      Estimated_Hours: cleanNumber(rowObj['Estimated Hours'] ?? rowObj.Estimated_Hours ?? rowObj.estimated_hours, 0),
+      Actual_Hours: cleanNumber(rowObj['Actual Hours'] ?? rowObj.Actual_Hours ?? rowObj.actual_hours, 0),
+      Allocated_Budget_USD: cleanNumber(rowObj['Allocated Budget ($)'] ?? rowObj.Allocated_Budget_USD ?? rowObj.budget, 0),
+      Actual_Spend_USD: cleanNumber(rowObj['Actual Spend ($)'] ?? rowObj.Actual_Spend_USD ?? rowObj.spent, 0),
+      Start_Date: rowObj.Start_Date || rowObj['Start Date'] || rowObj.start_date || '2026-08-01',
+      Due_Date: rowObj.Due_Date || rowObj['Due Date'] || rowObj.due_date || '2026-10-01',
+      Risk_Level: rowObj.Risk_Level || rowObj['Risk Level'] || rowObj.risk || 'Low',
+      Blocker_Details: rowObj.Blocker_Details || rowObj['Blocker Details'] || rowObj.blocker || 'None',
       ...rowObj,
+      Progress_Percent: progressPercent,
+      'Progress (%)': progressPercent,
+      Progress: progressPercent,
+      progress: progressPercent,
     };
 
     records.push(task);
   }
 
   return { records, columns: headers };
+}
+
+export { parseContentToJSON };
+
+/**
+ * Standardized task sanitizer ensuring all fields are typed and valid
+ */
+export function sanitizeTask(r: any, idx: number = 0): ProjectTask {
+  const rawStatus = String(r.Status || r.status || 'In Progress');
+  const rawProgress = extractRawProgress(r);
+  const progressPercent = cleanProgress(rawProgress, rawStatus);
+
+  return {
+    ...r,
+    Task_ID: String(r.Task_ID || r['Task ID'] || r.id || `TASK-${String(idx + 1).padStart(3, '0')}`),
+    Project_Name: String(r.Project_Name || r['Project Name'] || r.project || 'General Project'),
+    Task_Title: String(r.Task_Title || r['Task Title'] || r.task || r.title || `Task ${idx + 1}`),
+    Sprint: String(r.Sprint || r.sprint || 'Sprint 1'),
+    Owner: String(r.Owner || r['Owner / Project Manager'] || r['Project Manager'] || r.Project_Manager || r.assignee || 'Unassigned'),
+    Project_Manager: String(r.Project_Manager || r['Project Manager'] || r['Owner / Project Manager'] || r.Owner || 'Unassigned'),
+    Department: String(r.Department || r.dept || 'Engineering'),
+    Priority: String(r.Priority || r.priority || 'Medium'),
+    Status: rawStatus,
+    Estimated_Hours: cleanNumber(r['Estimated Hours'] ?? r.Estimated_Hours ?? r.estimated_hours, 0),
+    Actual_Hours: cleanNumber(r['Actual Hours'] ?? r.Actual_Hours ?? r.actual_hours, 0),
+    Allocated_Budget_USD: cleanNumber(r['Allocated Budget ($)'] ?? r.Allocated_Budget_USD ?? r.budget, 0),
+    Actual_Spend_USD: cleanNumber(r['Actual Spend ($)'] ?? r.Actual_Spend_USD ?? r.spent, 0),
+    Start_Date: String(r.Start_Date || r['Start Date'] || r.start_date || '2026-08-01'),
+    Due_Date: String(r.Due_Date || r['Due Date'] || r.due_date || r.End_Date || '2026-10-01'),
+    Risk_Level: String(r.Risk_Level || r['Risk Level'] || r.risk || 'Low'),
+    Number_of_Team_Members: cleanNumber(r['Number of Team Members'] ?? r.Number_of_Team_Members ?? r.team_members, 1),
+    Blocker_Details: String(r['Blocker Details'] ?? r.Blocker_Details ?? r.blocker ?? 'None'),
+    Progress_Percent: progressPercent,
+    'Progress (%)': progressPercent,
+    Progress: progressPercent,
+    progress: progressPercent,
+  };
 }
 
 /**
@@ -182,6 +375,8 @@ export function getProjectManagementDataset(): DatasetInfo {
     path.join(cwd, 'Project Management.csv'),
     path.join(cwd, 'Project Management.json'),
     path.join(cwd, 'Project Management.txt'),
+    path.join(cwd, 'Data set', '150-Project Portfolio (150 tasks).csv'),
+    path.join(cwd, 'Data set', 'Projects.csv'),
   ];
 
   let resolvedPath: string | null = null;
@@ -192,13 +387,8 @@ export function getProjectManagementDataset(): DatasetInfo {
     try {
       if (fs.existsSync(candidate)) {
         const content = fs.readFileSync(candidate, 'utf-8');
-        // Delete obsolete legacy PRJ-101 dataset if present
+        // Skip obsolete legacy PRJ-101 dataset if present without deleting
         if (content.includes('PRJ-101')) {
-          try {
-            fs.unlinkSync(candidate);
-          } catch {
-            // Ignore
-          }
           continue;
         }
         rawContent = content;
@@ -219,13 +409,7 @@ export function getProjectManagementDataset(): DatasetInfo {
       if (match) {
         const testPath = path.join(cwd, match);
         const content = fs.readFileSync(testPath, 'utf-8');
-        if (content.includes('PRJ-101')) {
-          try {
-            fs.unlinkSync(testPath);
-          } catch {
-            // Ignore
-          }
-        } else {
+        if (!content.includes('PRJ-101')) {
           resolvedPath = testPath;
           resolvedFileName = match;
           rawContent = content;
@@ -271,35 +455,8 @@ export function getProjectManagementDataset(): DatasetInfo {
     resolvedFileName = 'Project Portfolio (100 Tasks)';
   }
 
-  // Compute analytical metrics
-  let totalBudget = 0;
-  let totalSpend = 0;
-  let sumProgress = 0;
-  let blockedCount = 0;
-  let inProgressCount = 0;
-  let completedCount = 0;
-  let criticalRiskCount = 0;
-  const departmentsSet = new Set<string>();
-  const projectsSet = new Set<string>();
-
-  for (const r of records) {
-    totalBudget += Number(r.Allocated_Budget_USD || 0);
-    totalSpend += Number(r.Actual_Spend_USD || 0);
-    sumProgress += Number(r.Progress_Percent || 0);
-
-    const st = String(r.Status || '').toLowerCase();
-    if (st.includes('block')) blockedCount++;
-    else if (st.includes('progress')) inProgressCount++;
-    else if (st.includes('complete')) completedCount++;
-
-    const risk = String(r.Risk_Level || '').toLowerCase();
-    if (risk.includes('critical')) criticalRiskCount++;
-
-    if (r.Department) departmentsSet.add(r.Department);
-    if (r.Project_Name) projectsSet.add(r.Project_Name);
-  }
-
-  const avgProgress = records.length > 0 ? Math.round(sumProgress / records.length) : 0;
+  // Compute analytical metrics using centralized source of truth
+  const summary = calculateDatasetSummary(records);
 
   return {
     fileName: resolvedFileName,
@@ -308,16 +465,6 @@ export function getProjectManagementDataset(): DatasetInfo {
     columns,
     records,
     fileSizeBytes,
-    summary: {
-      totalBudget,
-      totalSpend,
-      avgProgress,
-      blockedCount,
-      inProgressCount,
-      completedCount,
-      criticalRiskCount,
-      departments: Array.from(departmentsSet),
-      projects: Array.from(projectsSet),
-    },
+    summary,
   };
 }

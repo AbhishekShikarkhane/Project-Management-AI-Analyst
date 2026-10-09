@@ -479,15 +479,41 @@ export const GanttChartVisualization: React.FC = () => {
           progressSelectedColor: isHighlighted ? '#3730A3' : colorStyles.progressSelectedColor,
         },
         isDisabled: false,
-        project: item.Project_Name,
         _rawTask: item,
       } as Task & { _rawTask: ProjectTask };
     });
   }, [dataset, highlightIds]);
 
-  // Calculate synchronized height fitting comfortably within 500px container
+  // Smoothly center the timeline on the active tasks without triggering gantt-task-react's internal viewDate loop
+  useEffect(() => {
+    if (!isMounted || ganttTasks.length === 0) return;
+    const timer = setTimeout(() => {
+      const container = document.querySelector('.gantt-card-wrapper ._CZjuD') as HTMLElement | null;
+      if (container) {
+        let targetScroll = 450;
+        if (viewMode === ViewMode.Day) targetScroll = 2300;
+        else if (viewMode === ViewMode.Week) targetScroll = 850;
+        else if (viewMode === ViewMode.Month) targetScroll = 450;
+        container.scrollLeft = targetScroll;
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [isMounted, viewMode, ganttTasks.length]);
+
+  const handleCenterTasks = () => {
+    const container = document.querySelector('.gantt-card-wrapper ._CZjuD') as HTMLElement | null;
+    if (container) {
+      let targetScroll = 450;
+      if (viewMode === ViewMode.Day) targetScroll = 2300;
+      else if (viewMode === ViewMode.Week) targetScroll = 850;
+      else if (viewMode === ViewMode.Month) targetScroll = 450;
+      container.scrollTo({ left: targetScroll, behavior: 'smooth' });
+    }
+  };
+
+  // Calculate synchronized height fitting comfortably within container
   const ganttHeight = useMemo(() => {
-    return Math.min(420, Math.max(160, ganttTasks.length * 38));
+    return Math.min(480, Math.max(200, ganttTasks.length * 38));
   }, [ganttTasks.length]);
 
   if (!isMounted) {
@@ -604,6 +630,20 @@ export const GanttChartVisualization: React.FC = () => {
             >
               Month
             </button>
+            <button
+              id="gantt-center-tasks"
+              type="button"
+              className="view-mode-btn"
+              onClick={handleCenterTasks}
+              title="Smoothly center timeline directly onto active task bars"
+              style={{
+                marginLeft: '4px',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                color: '#38BDF8',
+              }}
+            >
+              Center on Tasks
+            </button>
           </div>
         </div>
       </div>
@@ -680,32 +720,31 @@ export const GanttChartVisualization: React.FC = () => {
             </button>
           </div>
         ) : (
-          /* 1 & 2. Scrollable container (strict max-h-[500px]) with visual timeline grid taking remaining width on right */
+          /* 1 & 2. Gantt container with synchronized list table and visual timeline */
           <div
-            className="gantt-scroll-wrapper max-h-[500px] overflow-y-auto overflow-x-auto"
+            className="gantt-scroll-wrapper"
             style={{
-              maxHeight: '500px',
-              overflowY: 'auto',
-              overflowX: 'auto',
               borderRadius: '8px',
               border: '1px solid rgba(255, 255, 255, 0.1)',
               background: '#0B132B',
+              overflow: 'hidden',
             }}
           >
-            <div style={{ width: '100%', minWidth: '850px' }}>
+            <div style={{ width: '100%' }}>
               <Gantt
+                key={`gantt-${viewMode}-${ganttTasks.length}`}
                 tasks={ganttTasks}
                 viewMode={viewMode}
                 onClick={(task) => toggleHighlightId(task.id)}
                 headerHeight={44}
                 columnWidth={columnWidth}
-                listCellWidth="116px"
+                listCellWidth="350px"
                 rowHeight={38}
                 ganttHeight={ganttHeight}
                 barCornerRadius={4}
                 barFill={70}
-                barProgressColor="rgba(255, 255, 255, 0.25)"
-                barProgressSelectedColor="rgba(255, 255, 255, 0.35)"
+                barProgressColor="rgba(255, 255, 255, 0.3)"
+                barProgressSelectedColor="rgba(255, 255, 255, 0.45)"
                 barBackgroundColor="#0284C7"
                 barBackgroundSelectedColor="#0369A1"
                 todayColor="rgba(56, 189, 248, 0.25)"

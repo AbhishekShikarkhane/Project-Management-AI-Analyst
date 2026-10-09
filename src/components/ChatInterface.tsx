@@ -10,7 +10,7 @@ import {
   Columns,
   RefreshCw,
 } from 'lucide-react';
-import { Header } from './Header';
+import { Header, ActiveSection } from './Header';
 import { MessageList, ExtendedMessage } from './MessageList';
 import { QuickSuggestions } from './QuickSuggestions';
 import { DatasetDrawer } from './DatasetDrawer';
@@ -30,6 +30,7 @@ export const ChatInterface: React.FC = () => {
     toggleHighlightId,
     generateLiveData,
     loadPortfolioData,
+    refreshFromDatabase,
     clearDataset,
     isGenerating,
   } = useData();
@@ -38,6 +39,10 @@ export const ChatInterface: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Workspace active view section & layout mode
+  const [activeSection, setActiveSection] = useState<ActiveSection>('overview');
+  const [viewMode, setViewMode] = useState<'split' | 'dashboard' | 'chat'>('split');
 
   // Modals & Drawers
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -147,7 +152,62 @@ export const ChatInterface: React.FC = () => {
         return;
       }
 
-      const textResponse = data.text_response || data.response || '';
+      // Extract answer safely using prioritized field resolution and JSON unwrapping (Priority 1)
+      let textResponse = '';
+      if (typeof data.answer === 'string' && data.answer.trim()) {
+        textResponse = data.answer.trim();
+      } else if (typeof data.text_response === 'string' && data.text_response.trim()) {
+        textResponse = data.text_response.trim();
+      } else if (typeof data.response === 'string' && data.response.trim()) {
+        textResponse = data.response.trim();
+      } else if (typeof data === 'string') {
+        textResponse = data.trim();
+      }
+
+      // If textResponse looks like serialized or unclosed JSON, unwrap the inner answer
+      if (
+        textResponse.includes('"text_response"') ||
+        textResponse.includes('"answer"') ||
+        textResponse.startsWith('{')
+      ) {
+        try {
+          const parsed = JSON.parse(textResponse);
+          if (parsed && typeof parsed.answer === 'string') {
+            textResponse = parsed.answer;
+          } else if (parsed && typeof parsed.text_response === 'string') {
+            textResponse = parsed.text_response;
+          }
+        } catch {
+          const markerMatch = textResponse.match(/"(?:text_response|answer)"\s*:\s*"/);
+          if (markerMatch && markerMatch.index !== undefined) {
+            const startIndex = markerMatch.index + markerMatch[0].length;
+            let extracted = textResponse.slice(startIndex);
+            const endMatch = extracted.match(/"(?:\s*,\s*"highlight_ids"|\s*\}|\s*$)/);
+            if (endMatch && endMatch.index !== undefined) {
+              extracted = extracted.slice(0, endMatch.index);
+            } else if (extracted.endsWith('"}') || extracted.endsWith('"\n}')) {
+              extracted = extracted.replace(/"\s*\}\s*$/, '');
+            } else if (extracted.endsWith('"')) {
+              extracted = extracted.slice(0, -1);
+            }
+            textResponse = extracted;
+          } else if (textResponse.startsWith('{') && textResponse.endsWith('}')) {
+            textResponse = textResponse.slice(1, -1).trim();
+          }
+        }
+      }
+
+      // Convert any literal \n and \" sequences if present
+      if (textResponse.includes('\\n')) {
+        textResponse = textResponse.replace(/\\n/g, '\n');
+      }
+      if (textResponse.includes('\\"')) {
+        textResponse = textResponse.replace(/\\"/g, '"');
+      }
+      if (textResponse.includes('\\r')) {
+        textResponse = textResponse.replace(/\\r/g, '');
+      }
+
       const returnedHighlightIds: string[] = Array.isArray(data.highlight_ids)
         ? data.highlight_ids
         : [];
@@ -211,12 +271,23 @@ export const ChatInterface: React.FC = () => {
   };
 
   return (
-    <div className="app-layout min-h-screen w-full overflow-y-auto">
-      {/* Top Header */}
+    <div className="app-workspace-layout min-h-screen w-full">
+      {/* Top Header & Navigation */}
       <Header
         datasetName={fileName}
         recordCount={dataset.length}
         hasApiKey={Boolean(apiKey)}
+        activeSection={activeSection}
+        onSelectSection={(section) => {
+          setActiveSection(section);
+          if (section === 'chat') {
+            setViewMode('chat');
+          } else if (viewMode === 'chat') {
+            setViewMode('split');
+          }
+        }}
+        viewMode={viewMode}
+        onChangeViewMode={setViewMode}
         onOpenUpload={() => setIsUploadModalOpen(true)}
         onGenerateLiveData={generateLiveData}
         onLoadPortfolio={() => loadPortfolioData(150)}
@@ -236,29 +307,34 @@ export const ChatInterface: React.FC = () => {
         messageCount={messages.length}
       />
 
-      {/* Main Split Layout: Visual Dashboard + Analyst Chat */}
-      <div className="main-content-split">
-        {/* Left Column: Real-Time Visualization Dashboard */}
-        <section
-          aria-label="Real-time Visualizations"
-          style={{
-            display:
-              mobileView === 'split' || mobileView === 'visuals' ? 'flex' : 'none',
-            flexDirection: 'column',
-            minWidth: 0,
-          }}
-        >
-          <VisualDashboard onOpenUpload={() => setIsUploadModalOpen(true)} />
-        </section>
+        {/* Main Content: Flexible Dashboard + Copilot Panels */}
+        <div className={`main-content-split ${viewMode === 'dashboard' ? 'single-dashboard' : ''} ${viewMode === 'chat' ? 'single-chat' : ''}`}>
+          {/* Left Column: Visual Dashboard */}
+          <section
+            aria-label="Real-time Visualizations"
+            style={{
+              display: viewMode === 'split' || viewMode === 'dashboard' ? 'flex' : 'none',
+              flex: viewMode === 'dashboard' ? '1 1 100%' : undefined,
+              flexDirection: 'column',
+              minWidth: 0,
+            }}
+          >
+            <VisualDashboard
+              onOpenUpload={() => setIsUploadModalOpen(true)}
+              activeSection={activeSection}
+            />
+          </section>
 
-        {/* Right Column: Chat Interface */}
-        <main
-          className="chat-main"
-          style={{
-            margin: 0,
-            display: mobileView === 'split' || mobileView === 'chat' ? 'flex' : 'none',
-          }}
-        >
+          {/* Right Column: AI Chat Analyst Copilot */}
+          <main
+            className="chat-main"
+            style={{
+              margin: 0,
+              display: viewMode === 'split' || viewMode === 'chat' ? 'flex' : 'none',
+              flex: viewMode === 'chat' ? '1 1 100%' : undefined,
+              maxWidth: viewMode === 'chat' ? '100%' : undefined,
+            }}
+          >
           {/* Statusbar */}
           <div className="chat-statusbar">
             <div className="status-indicator">

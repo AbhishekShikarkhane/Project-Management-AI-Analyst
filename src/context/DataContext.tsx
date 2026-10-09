@@ -3,47 +3,20 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { ProjectTask } from '@/lib/dataset';
 import { generatePortfolioData } from '@/lib/portfolioGenerator';
+import {
+  DatasetSummary,
+  ActiveFilters,
+  calculateDatasetSummary,
+  filterDataset,
+  calculateUnweightedAverageProgress,
+  DataQualityAudit,
+  ResourceAnalysis,
+  auditDataQuality,
+  analyzeResources,
+} from '@/lib/analytics';
 
-export interface DatasetSummary {
-  totalBudget: number;
-  totalSpend: number;
-  avgProgress: number;
-  blockedCount: number;
-  inProgressCount: number;
-  completedCount: number;
-  criticalRiskCount: number;
-  departments: string[];
-  projects: string[];
-  statusCounts: {
-    status: string;
-    count: number;
-    spend: number;
-    budget: number;
-    percentage: number;
-    hasHighlight?: boolean;
-  }[];
-  projectBudgets: {
-    initiativeKey: string;
-    displayName: string;
-    project: string;
-    department: string;
-    budget: number;
-    spend: number;
-    remaining: number;
-    variance: number;
-    burnRate: number;
-    taskCount: number;
-    hasHighlight?: boolean;
-  }[];
-  departmentDistribution: { name: string; count: number; hasHighlight?: boolean }[];
-}
-
-export interface ActiveFilters {
-  department: string | null;
-  status: string | null;
-  riskLevel: string | null;
-  project: string | null;
-}
+export type { DatasetSummary, ActiveFilters };
+export { calculateDatasetSummary, filterDataset, calculateUnweightedAverageProgress };
 
 interface DataContextType {
   dataset: ProjectTask[];
@@ -52,6 +25,8 @@ interface DataContextType {
   fileName: string;
   fileSize: number;
   summary: DatasetSummary;
+  dataQuality: DataQualityAudit;
+  resourceAnalysis: ResourceAnalysis;
   highlightIds: string[];
   setHighlightIds: (ids: string[]) => void;
   clearHighlights: () => void;
@@ -60,10 +35,13 @@ interface DataContextType {
   generateLiveData: () => Promise<boolean>;
   loadPortfolioData: (count?: number) => void;
   resetToDefault: () => void;
+  refreshFromDatabase: () => Promise<void>;
   clearDataset: () => void;
   resetDashboard: () => void;
   isLoading: boolean;
   isGenerating: boolean;
+  error: string | null;
+  clearError: () => void;
   // Cross-filtering state & functions
   filters: ActiveFilters;
   activeDepartment: string | null;
@@ -95,6 +73,149 @@ export function cleanNumber(val: any, fallback: number = 0): number {
   if (!str) return fallback;
   const parsed = Number(str);
   return isNaN(parsed) ? fallback : parsed;
+}
+
+/**
+ * Safely extracts raw Progress field from arbitrary record object formats:
+ * Checks 'Progress (%)', 'Progress %', 'Progress', 'progress', 'Progress_Percent',
+ * and fuzzy-matches columns containing 'progress' or 'completion'.
+ * Prioritizes raw CSV column headers over potentially stale Progress_Percent.
+ */
+export function extractRawProgress(r: any): any {
+  if (!r || typeof r !== 'object') return undefined;
+
+  // 1. Direct check of raw CSV column names
+  const candidateKeys = [
+    'Progress (%)',
+    'progress (%)',
+    'Progress%',
+    'Progress %',
+    'progress %',
+    'Progress',
+    'progress',
+    '% Progress',
+    '% progress',
+    'progress_%',
+    'Progress_%',
+    'Completion (%)',
+    'Completion %',
+    'Completion',
+    'completion',
+    'Percent Complete',
+    'Percent_Complete',
+    '% Complete',
+    '% Completed',
+    'percent_complete',
+  ];
+
+  for (const key of candidateKeys) {
+    if (r[key] !== undefined && r[key] !== null && String(r[key]).trim() !== '') {
+      return r[key];
+    }
+  }
+
+  // 2. Direct check of Progress_Percent if non-zero
+  if (r.Progress_Percent !== undefined && r.Progress_Percent !== null && String(r.Progress_Percent).trim() !== '') {
+    const num = Number(r.Progress_Percent);
+    if (!isNaN(num) && num > 0) {
+      return r.Progress_Percent;
+    }
+  }
+
+  // 3. Normalized search over all keys (removing whitespace, brackets, %)
+  const keys = Object.keys(r);
+  for (const k of keys) {
+    const normalized = k.toLowerCase().replace(/[\s_\-()%]/g, '');
+    if (
+      normalized === 'progress' ||
+      normalized === 'progresspercent' ||
+      normalized === 'completion' ||
+      normalized === 'percentcomplete' ||
+      normalized === 'completedpercent'
+    ) {
+      if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
+        return r[k];
+      }
+    }
+  }
+
+  // 4. Substring search for keys containing "progress" or "completion"
+  for (const k of keys) {
+    const lower = k.toLowerCase();
+    if (lower.includes('progress') || lower.includes('completion')) {
+      if (r[k] !== undefined && r[k] !== null && String(r[k]).trim() !== '') {
+        return r[k];
+      }
+    }
+  }
+
+  // 5. Fallback to Progress_Percent if 0 or other value
+  if (r.Progress_Percent !== undefined && r.Progress_Percent !== null && String(r.Progress_Percent).trim() !== '') {
+    return r.Progress_Percent;
+  }
+
+  return undefined;
+}
+
+/**
+ * Robust Progress sanitizer:
+ * - Strips any '%' symbols, extra spaces, and trailing symbols
+ * - Correctly converts raw string representations to valid JavaScript Numbers
+ * - Handles decimal fraction representations (e.g. 0.45 or "0.45" -> 45%)
+ * - Clamps values between 0 and 100
+ * - Provides intelligent fallback: If status is 'Completed' and progress is 0 or unassigned,
+ *   safely marks as 100%. If status is 'In Progress' and progress is unassigned, provides 50%.
+ */
+export function cleanProgress(val: any, status?: string, fallback?: number): number {
+  const stLower = status ? String(status).toLowerCase().trim() : '';
+  const isCompleted = stLower.includes('complete') || stLower.includes('done');
+  const isInProgress = stLower.includes('progress') || stLower.includes('active') || stLower.includes('track');
+
+  if (val !== undefined && val !== null && String(val).trim() !== '') {
+    if (typeof val === 'number') {
+      if (!isNaN(val)) {
+        // Decimal fraction between 0 and 1 exclusive (e.g. 0.85 -> 85%)
+        if (val > 0 && val < 1) {
+          return Math.round(val * 100);
+        }
+        // If task is completed and value is 0 (artifact of previous 0 default), normalize to 100
+        if (val === 0 && isCompleted) {
+          return 100;
+        }
+        return Math.min(100, Math.max(0, Math.round(val)));
+      }
+    } else {
+      const rawStr = String(val).trim();
+      // Remove % sign and non-numeric characters except digits, minus, and period
+      const stripped = rawStr.replace(/%/g, '').replace(/[^0-9.-]/g, '').trim();
+      if (stripped !== '') {
+        const parsed = Number(stripped);
+        if (!isNaN(parsed)) {
+          // Decimal fraction e.g. "0.85" without % sign
+          if (parsed > 0 && parsed < 1 && rawStr.includes('.') && !rawStr.includes('%')) {
+            return Math.round(parsed * 100);
+          }
+          if (parsed === 0 && isCompleted) {
+            return 100;
+          }
+          return Math.min(100, Math.max(0, Math.round(parsed)));
+        }
+      }
+    }
+  }
+
+  if (fallback !== undefined && fallback !== null && !isNaN(fallback)) {
+    return Math.min(100, Math.max(0, Math.round(fallback)));
+  }
+
+  if (isCompleted) {
+    return 100;
+  }
+  if (isInProgress) {
+    return 50;
+  }
+
+  return 0;
 }
 
 /**
@@ -200,8 +321,11 @@ export function sanitizeTask(r: any, idx: number = 0): ProjectTask {
       ? rawEndDate.trim()
       : endDateObj.toISOString().split('T')[0];
 
+  const rawStatus = String(r.Status || r.status || 'In Progress');
+
   const projectManager = String(
     r['Project Manager'] ||
+    r['Owner / Project Manager'] ||
     r.Project_Manager ||
     r.Manager ||
     r.manager ||
@@ -228,6 +352,8 @@ export function sanitizeTask(r: any, idx: number = 0): ProjectTask {
 
   const teamMembers = cleanNumber(
     r['Number of Team Members'] ??
+    r['Team Members'] ??
+    r.Team_Members ??
     r.Number_of_Team_Members ??
     r.Team_Members_Count ??
     r.team_members ??
@@ -238,43 +364,66 @@ export function sanitizeTask(r: any, idx: number = 0): ProjectTask {
   );
 
   const budget = cleanNumber(
-    r.Allocated_Budget_USD ?? r.Budget ?? r['Budget (USD)'] ?? r.budget ?? r.budget_allocated,
-    25000
+    r['Allocated Budget ($)'] ??
+    r['Allocated Budget'] ??
+    r.Allocated_Budget_USD ??
+    r.Budget ??
+    r['Budget (USD)'] ??
+    r.budget ??
+    r.budget_allocated,
+    0
   );
 
   const spend = cleanNumber(
-    r.Actual_Spend_USD ?? r.Spent ?? r['Spent (USD)'] ?? r.spent ?? r.spend ?? r.budget_spent,
-    22000
+    r['Actual Spend ($)'] ??
+    r['Actual Spend'] ??
+    r.Actual_Spend_USD ??
+    r.Spent ??
+    r['Spent (USD)'] ??
+    r.spent ??
+    r.spend ??
+    r.budget_spent,
+    0
   );
+
+  const rawProgress = extractRawProgress(r);
+  const progressPercent = cleanProgress(rawProgress, rawStatus);
 
   return {
     ...r,
-    Task_ID: String(r.Task_ID || r.id || r.taskId || `TASK-${String(idx + 1).padStart(3, '0')}`),
-    Project_Name: String(r.Project_Name || r.project || r.projectName || 'General Project'),
-    Task_Title: String(r.Task_Title || r.title || r.task || `Task ${idx + 1}`),
+    Task_ID: String(r.Task_ID || r['Task ID'] || r.id || r.taskId || `TASK-${String(idx + 1).padStart(3, '0')}`),
+    Project_Name: String(r.Project_Name || r['Project Name'] || r.project || r.projectName || 'General Project'),
+    Task_Title: String(r.Task_Title || r['Task Title'] || r.Task_Name || r['Task Name'] || r.title || r.task || `Task ${idx + 1}`),
     Sprint: String(r.Sprint || r.sprint || 'Sprint 1'),
     Owner: projectManager,
     Project_Manager: projectManager,
     'Project Manager': projectManager,
+    'Owner / Project Manager': projectManager,
     Department: String(r.Department || r.department || r.dept || 'Engineering'),
     Priority: priority,
-    Status: String(r.Status || r.status || 'In Progress'),
-    // Strictly typed numbers
-    Progress_Percent: cleanNumber(r.Progress_Percent ?? r.progress, 0),
-    Estimated_Hours: cleanNumber(r.Estimated_Hours ?? r.estimated_hours, 40),
-    Actual_Hours: cleanNumber(r.Actual_Hours ?? r.actual_hours, 35),
+    Status: rawStatus,
+    // Strictly typed numerical progress and metric fields
+    Progress_Percent: progressPercent,
+    'Progress (%)': progressPercent,
+    Progress: progressPercent,
+    progress: progressPercent,
+    Estimated_Hours: cleanNumber(r['Estimated Hours'] ?? r.Estimated_Hours ?? r.estimated_hours, 0),
+    Actual_Hours: cleanNumber(r['Actual Hours'] ?? r.Actual_Hours ?? r.actual_hours, 0),
     Allocated_Budget_USD: budget,
     Actual_Spend_USD: spend,
     Budget: budget,
     'Budget (USD)': budget,
+    'Allocated Budget ($)': budget,
     Spent: spend,
     'Spent (USD)': spend,
+    'Actual Spend ($)': spend,
     // Time-based fields (strings + JavaScript Date objects)
     Start_Date: formattedStart,
     Due_Date: formattedEnd,
     End_Date: formattedEnd,
     'Start Date': formattedStart,
     'End Date': formattedEnd,
+    'Due Date': formattedEnd,
     startDateObj,
     dueDateObj: endDateObj,
     endDateObj,
@@ -287,7 +436,8 @@ export function sanitizeTask(r: any, idx: number = 0): ProjectTask {
     Number_of_Team_Members: teamMembers,
     Team_Members_Count: teamMembers,
     'Number of Team Members': teamMembers,
-    Blocker_Details: String(r.Blocker_Details || r.blocker || 'None'),
+    'Team Members': teamMembers,
+    Blocker_Details: String(r.Blocker_Details || r['Blocker Details'] || r.blocker || r.Blocked || 'None'),
   };
 }
 
@@ -365,6 +515,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const clearError = () => setError(null);
 
   // Cross-filtering active state
   const [filters, setFilters] = useState<ActiveFilters>({
@@ -380,32 +532,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Dynamic filtered dataset based on active cross-filters
   const filteredDataset = useMemo(() => {
-    if (!hasActiveFilters) return rawDataset;
-    return rawDataset.filter((task) => {
-      if (filters.department) {
-        if (String(task.Department || '').toLowerCase() !== filters.department.toLowerCase()) {
-          return false;
-        }
-      }
-      if (filters.status) {
-        if (String(task.Status || '').toLowerCase() !== filters.status.toLowerCase()) {
-          return false;
-        }
-      }
-      if (filters.riskLevel) {
-        if (String(task.Risk_Level || '').toLowerCase() !== filters.riskLevel.toLowerCase()) {
-          return false;
-        }
-      }
-      if (filters.project && filters.project.trim()) {
-        const query = filters.project.toLowerCase().trim();
-        if (!String(task.Project_Name || '').toLowerCase().includes(query)) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [rawDataset, filters, hasActiveFilters]);
+    return filterDataset(rawDataset, filters);
+  }, [rawDataset, filters]);
 
   // Helper to persist dataset into browser localStorage
   const persistDataset = (tasks: ProjectTask[], name: string) => {
@@ -424,8 +552,45 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Initial load logic: check localStorage first so visual charts survive reloads
+  const refreshFromDatabase = async () => {
+    setIsLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch('/api/dataset', { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+      }
+      const json = await res.json();
+      if (json?.success && json?.data && Array.isArray(json.data.records) && json.data.records.length > 0) {
+        const records = json.data.records.map((r: any, idx: number) => sanitizeTask(r, idx));
+        const name = json.data.fileName || `Database Portfolio (${records.length} tasks)`;
+        setRawDataset(records);
+        setFileName(name);
+        setFileSize(json.data.fileSizeBytes || records.length * 150);
+        persistDataset(records, name);
+        setError(null);
+      } else {
+        throw new Error(json?.error || 'Database returned zero records or invalid format.');
+      }
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      const isAbort = e.name === 'AbortError';
+      const msg = isAbort
+        ? 'Database query timed out after 8 seconds. Please check server status and retry.'
+        : `Database sync error: ${e.message}`;
+      console.warn('Failed to sync from database:', e);
+      setError(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Initial load logic: check localStorage for immediate render, then synchronize from persistent database
   useEffect(() => {
+    setIsLoading(true);
+    let hasLocal = false;
     try {
       if (typeof window !== 'undefined') {
         const savedData = localStorage.getItem('pm-insight-dataset');
@@ -439,8 +604,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               `Saved Portfolio (${sanitized.length} tasks)`;
             setFileName(savedName);
             setFileSize(new Blob([savedData]).size);
-            setIsLoading(false);
-            return;
+            hasLocal = true;
           }
         }
       }
@@ -448,11 +612,51 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('Failed to load dataset from localStorage:', e);
     }
 
-    // If nothing saved in localStorage, start in clean empty state
-    setRawDataset([]);
-    setFileName('');
-    setFileSize(0);
-    setIsLoading(false);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    // Always fetch latest authoritative data from server database to support multi-session persistence
+    fetch('/api/dataset', { signal: controller.signal })
+      .then(async (res) => {
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: Failed to reach database API`);
+        }
+        return res.json();
+      })
+      .then((json) => {
+        if (json?.success && json?.data && Array.isArray(json.data.records)) {
+          if (json.data.records.length > 0) {
+            const records = json.data.records.map((r: any, idx: number) => sanitizeTask(r, idx));
+            const name = json.data.fileName || `Database Portfolio (${records.length} tasks)`;
+            setRawDataset(records);
+            setFileName(name);
+            setFileSize(json.data.fileSizeBytes || records.length * 150);
+            persistDataset(records, name);
+            setError(null);
+          } else if (!hasLocal) {
+            setRawDataset([]);
+            setFileName('');
+            setFileSize(0);
+          }
+        } else {
+          throw new Error(json?.error || 'Invalid API response format');
+        }
+      })
+      .catch((err) => {
+        clearTimeout(timeoutId);
+        const isAbort = err.name === 'AbortError';
+        const msg = isAbort
+          ? 'Database query timed out during initial load. Click "Retry Database Sync" to reconnect.'
+          : (err.message || 'Failed to contact database API');
+        console.warn('Could not contact /api/dataset on startup:', err);
+        if (!hasLocal) {
+          setError(msg);
+        }
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
   }, []);
 
   const loadDefaultData = async () => {
@@ -461,10 +665,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await fetch('/api/dataset');
       const json = await res.json();
       if (json?.success && json?.data) {
-        const records = (json.data.previewRecords || []).map((r: any, idx: number) =>
+        const records = (json.data.records || json.data.previewRecords || []).map((r: any, idx: number) =>
           sanitizeTask(r, idx)
         );
-        const name = json.data.fileName || 'Project Portfolio (100 Tasks)';
+        const name = json.data.fileName || `Project Portfolio (${records.length} Tasks)`;
         setRawDataset(records);
         setFileName(name);
         setFileSize(json.data.fileSizeBytes || 0);
@@ -496,6 +700,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setHighlightIds([]);
       setFilters({ department: null, status: null, riskLevel: null, project: null });
       persistDataset(parsed, uploadedName);
+
+      // Asynchronously persist to SQLite database on the server
+      fetch('/api/dataset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, fileName: uploadedName, mode: 'replace' }),
+      }).catch((err) => console.warn('Background database persistence failed:', err));
+
       return true;
     } catch (err) {
       console.error('Upload parse error:', err);
@@ -697,160 +909,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setHighlightIds([]);
   };
 
-  // Compute rich summary and aggregation for charts
+  // Compute rich summary and aggregation for charts using single source of truth
   const summary: DatasetSummary = useMemo(() => {
-    let totalBudget = 0;
-    let totalSpend = 0;
-    let sumProgress = 0;
-    let blockedCount = 0;
-    let inProgressCount = 0;
-    let completedCount = 0;
-    let criticalRiskCount = 0;
-
-    const statusMap = new Map<
-      string,
-      { count: number; spend: number; budget: number; tasks: ProjectTask[] }
-    >();
-    const initiativeMap = new Map<
-      string,
-      {
-        department: string;
-        project: string;
-        budget: number;
-        spend: number;
-        tasks: ProjectTask[];
-      }
-    >();
-    const deptMap = new Map<string, { count: number; tasks: ProjectTask[] }>();
-
-    for (const task of filteredDataset) {
-      const budget = cleanNumber(task.Allocated_Budget_USD, 0);
-      const spend = cleanNumber(
-        task.Actual_Spend_USD ?? task.Actual_Spend ?? task.Spent ?? task.spent,
-        0
-      );
-      const progress = cleanNumber(task.Progress_Percent, 0);
-
-      totalBudget += budget;
-      totalSpend += spend;
-      sumProgress += progress;
-
-      const st = String(task.Status || 'Planned');
-      const stLower = st.toLowerCase();
-      if (stLower.includes('block') || stLower.includes('risk') || stLower.includes('delay')) {
-        blockedCount++;
-      } else if (stLower.includes('progress') || stLower.includes('track')) {
-        inProgressCount++;
-      } else if (stLower.includes('complete') || stLower.includes('done')) {
-        completedCount++;
-      }
-
-      if (String(task.Risk_Level || '').toLowerCase().includes('critical')) {
-        criticalRiskCount++;
-      }
-
-      // Status aggregation - sum of Spent (USD) and task count
-      if (!statusMap.has(st)) {
-        statusMap.set(st, { count: 0, spend: 0, budget: 0, tasks: [] });
-      }
-      const stEntry = statusMap.get(st)!;
-      stEntry.count++;
-      stEntry.spend += spend;
-      stEntry.budget += budget;
-      stEntry.tasks.push(task);
-
-      // Department & Project Name initiative grouping
-      const dept = String(task.Department || 'Engineering');
-      const prj = String(task.Project_Name || 'General Project');
-      const initiativeKey = `${dept} • ${prj}`;
-
-      if (!initiativeMap.has(initiativeKey)) {
-        initiativeMap.set(initiativeKey, {
-          department: dept,
-          project: prj,
-          budget: 0,
-          spend: 0,
-          tasks: [],
-        });
-      }
-      const initEntry = initiativeMap.get(initiativeKey)!;
-      initEntry.budget += budget;
-      initEntry.spend += spend;
-      initEntry.tasks.push(task);
-
-      // Dept aggregation
-      if (!deptMap.has(dept)) {
-        deptMap.set(dept, { count: 0, tasks: [] });
-      }
-      const deptEntry = deptMap.get(dept)!;
-      deptEntry.count++;
-      deptEntry.tasks.push(task);
-    }
-
-    const avgProgress =
-      filteredDataset.length > 0 ? Math.round(sumProgress / filteredDataset.length) : 0;
-
-    // Build chart datasets with cross-filter highlight flags and financial spend metrics
-    const statusCounts = Array.from(statusMap.entries()).map(([status, val]) => ({
-      status,
-      count: val.count,
-      spend: val.spend,
-      budget: val.budget,
-      percentage: totalSpend > 0 ? Math.round((val.spend / totalSpend) * 1000) / 10 : 0,
-      hasHighlight:
-        highlightIds.length > 0 &&
-        val.tasks.some((t) => highlightIds.includes(t.Task_ID)),
-    }));
-
-    // Initiatives grouped by Department and Project Name
-    const projectBudgets = Array.from(initiativeMap.entries()).map(([key, val]) => {
-      const burnRate =
-        val.budget > 0 ? Math.round((val.spend / val.budget) * 1000) / 10 : 0;
-      const remaining = Math.max(0, val.budget - val.spend);
-      const variance = val.budget - val.spend;
-
-      return {
-        initiativeKey: key,
-        displayName: key,
-        project: val.project,
-        department: val.department,
-        budget: val.budget,
-        spend: val.spend,
-        remaining,
-        variance,
-        burnRate,
-        taskCount: val.tasks.length,
-        hasHighlight:
-          highlightIds.length > 0 &&
-          val.tasks.some((t) => highlightIds.includes(t.Task_ID)),
-      };
-    });
-
-    const departmentDistribution = Array.from(deptMap.entries()).map(([name, val]) => ({
-      name,
-      count: val.count,
-      hasHighlight:
-        highlightIds.length > 0 &&
-        val.tasks.some((t) => highlightIds.includes(t.Task_ID)),
-    }));
-
-    return {
-      totalBudget,
-      totalSpend,
-      avgProgress,
-      blockedCount,
-      inProgressCount,
-      completedCount,
-      criticalRiskCount,
-      departments: Array.from(deptMap.keys()),
-      projects: Array.from(
-        new Set(Array.from(initiativeMap.values()).map((v) => v.project))
-      ),
-      statusCounts,
-      projectBudgets,
-      departmentDistribution,
-    };
+    return calculateDatasetSummary(filteredDataset, highlightIds);
   }, [filteredDataset, highlightIds]);
+
+  const dataQuality: DataQualityAudit = useMemo(() => {
+    return auditDataQuality(filteredDataset);
+  }, [filteredDataset]);
+
+  const resourceAnalysis: ResourceAnalysis = useMemo(() => {
+    return analyzeResources(filteredDataset);
+  }, [filteredDataset]);
 
   return (
     <DataContext.Provider
@@ -861,6 +931,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         fileName,
         fileSize,
         summary,
+        dataQuality,
+        resourceAnalysis,
         highlightIds,
         setHighlightIds,
         clearHighlights,
@@ -869,10 +941,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         generateLiveData,
         loadPortfolioData,
         resetToDefault,
+        refreshFromDatabase,
         clearDataset,
         resetDashboard,
         isLoading,
         isGenerating,
+        error,
+        clearError,
         filters,
         activeDepartment: filters.department,
         activeStatus: filters.status,

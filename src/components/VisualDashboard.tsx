@@ -38,6 +38,7 @@ import { useData, formatCompactCurrency } from '@/context/DataContext';
 import { TimelineVisualization } from './TimelineVisualization';
 import { GanttChartVisualization } from './GanttChartVisualization';
 import { ChartErrorBoundary } from './ChartErrorBoundary';
+import { ActiveSection } from './Header';
 
 export const getStatusColor = (status: string): string => {
   const s = (status || '').toLowerCase();
@@ -147,6 +148,13 @@ const FinancialStatusTooltip: React.FC<StatusTooltipProps> = ({ active, payload 
           <span style={{ color: '#94A3B8' }}>Percentage of Total:</span>
           <strong style={{ color: '#38BDF8' }}>{data.percentage}%</strong>
         </div>
+
+        {data.avgProgress !== undefined && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+            <span style={{ color: '#94A3B8' }}>Avg Progress:</span>
+            <strong style={{ color: '#10B981' }}>{data.avgProgress}%</strong>
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
           <span style={{ color: '#94A3B8' }}>Allocated Budget:</span>
@@ -297,6 +305,13 @@ const BudgetBurnRateTooltip: React.FC<BurnRateTooltipProps> = ({ active, payload
           </span>
         </div>
 
+        {data.avgProgress !== undefined && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+            <span style={{ color: '#94A3B8' }}>Avg Progress:</span>
+            <strong style={{ color: '#10B981' }}>{data.avgProgress}%</strong>
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
           <span style={{ color: '#94A3B8' }}>Tasks:</span>
           <span style={{ color: '#CBD5E1' }}>{data.taskCount || 1} tasks</span>
@@ -310,9 +325,10 @@ const DEPT_COLORS = ['#6366F1', '#06B6D4', '#10B981', '#F59E0B', '#EC4899', '#8B
 
 interface VisualDashboardProps {
   onOpenUpload?: () => void;
+  activeSection?: ActiveSection;
 }
 
-export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }) => {
+export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload, activeSection }) => {
   const {
     dataset,
     rawDataset,
@@ -325,7 +341,10 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
     resetToDefault,
     generateLiveData,
     loadPortfolioData,
+    refreshFromDatabase,
+    isLoading,
     isGenerating,
+    error,
     filters,
     activeDepartment,
     activeStatus,
@@ -341,6 +360,11 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
   } = useData();
 
   const isCrossFiltering = highlightIds.length > 0;
+
+  const showFinancials = !activeSection || activeSection === 'overview' || activeSection === 'financials';
+  const showGantt = !activeSection || activeSection === 'overview' || activeSection === 'gantt';
+  const showTasks = !activeSection || activeSection === 'overview' || activeSection === 'tasks';
+  const showTimeline = !activeSection || activeSection === 'overview';
 
   // Unique filter option lists from dataset
   const availableDepartments = useMemo(() => {
@@ -495,8 +519,76 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
     });
   }, [summary.departmentDistribution, highlightIds, isCrossFiltering, dataset, activeDepartment]);
 
-  // Requirement 2: Only show "Please Upload a Dataset" screen if the raw dataset is empty.
-  // It should NEVER trigger based on the length of filteredDataset or active filter results.
+  // 1. Loading state while database synchronization is in flight
+  if (isLoading && (!rawDataset || rawDataset.length === 0)) {
+    return (
+      <div className="visual-dashboard-container" style={{ padding: '80px 24px', textAlign: 'center' }}>
+        <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
+          <div className="spinner" style={{ width: 44, height: 44, border: '3px solid rgba(99, 102, 241, 0.2)', borderTopColor: '#6366F1', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+          <h3 style={{ fontSize: '1.25rem', color: '#F8FAFC', fontWeight: 600 }}>
+            Synchronizing Portfolio from SQLite Database...
+          </h3>
+          <p style={{ color: '#94A3B8', fontSize: '0.88rem', maxWidth: 460 }}>
+            Querying persistent records, deterministic budget variance analytics, and Gantt timeline schedules.
+          </p>
+          <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => refreshFromDatabase()}
+              style={{ padding: '8px 16px', fontSize: '0.82rem' }}
+            >
+              Retry Sync
+            </button>
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={() => loadPortfolioData(150)}
+              style={{ padding: '8px 16px', fontSize: '0.82rem' }}
+            >
+              Load 150-Task Portfolio
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Error state if database query failed
+  if (error && (!rawDataset || rawDataset.length === 0)) {
+    return (
+      <div className="visual-dashboard-container" style={{ padding: '60px 24px' }}>
+        <div className="empty-dataset-card" style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.06)' }}>
+          <div className="empty-icon-wrap" style={{ background: 'rgba(239, 68, 68, 0.15)' }}>
+            <AlertTriangle size={32} color="#EF4444" />
+          </div>
+          <h3 style={{ color: '#FCA5A5' }}>Database Synchronization Error</h3>
+          <p style={{ color: '#E2E8F0', marginBottom: '16px' }}>{error}</p>
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => refreshFromDatabase()}
+              style={{ background: '#EF4444', borderColor: '#DC2626' }}
+            >
+              Retry Database Sync
+            </button>
+            {onOpenUpload && (
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={onOpenUpload}
+              >
+                Upload File
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. Only show "Please Upload a Dataset" screen if the raw dataset is truly empty
   if (!rawDataset || rawDataset.length === 0) {
     return (
       <div className="visual-dashboard-container">
@@ -714,31 +806,13 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
         </div>
       </div>
 
-      {/* Portfolio Toolbar / Quick Control Bar */}
-      <div className="portfolio-control-bar">
-        <div className="portfolio-info-left">
-          <div className="portfolio-title-badge">
-            <Layers size={15} color="#38BDF8" />
-            <span style={{ fontWeight: 600, fontSize: '0.84rem', color: '#F1F5F9' }}>
-              Project Portfolio Dashboard
-            </span>
-          </div>
-          <span style={{ fontSize: '0.74rem', color: '#94A3B8' }}>
-            {dataset.length} tasks • {summary.projects.length} projects • {summary.departments.length} departments
+      {/* Portfolio Dataset Scope Bar */}
+      <div className="portfolio-control-bar" style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="portfolio-info-left" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Layers size={14} color="#38BDF8" />
+          <span style={{ fontSize: '0.76rem', color: '#94A3B8' }}>
+            Active Dataset Scope: <strong style={{ color: '#F8FAFC' }}>{dataset.length}</strong> tasks • <strong style={{ color: '#F8FAFC' }}>{summary.projects.length}</strong> projects • <strong style={{ color: '#F8FAFC' }}>{summary.departments.length}</strong> departments
           </span>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button
-            id="btn-dashboard-load-portfolio"
-            type="button"
-            className="btn-load-portfolio"
-            onClick={() => loadPortfolioData(150)}
-            title="Generate & load deterministic 150-row project portfolio with edge cases (blockers, overruns, slippage, bottlenecks)"
-          >
-            <Layers size={14} />
-            <span>Load 150-Project Portfolio</span>
-          </button>
         </div>
       </div>
 
@@ -989,8 +1063,10 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
       ) : (
         <>
           {/* Chronological Stacked Column Timeline Visualization */}
-          <TimelineVisualization />
+          {showTimeline && <TimelineVisualization />}
 
+      {showFinancials && (
+        <>
       {/* Chart 1: Financial Spend by Task Status (Donut Chart) */}
       <ChartErrorBoundary fallbackTitle="Financial Spend Chart Unavailable" onReset={clearAllFilters}>
         <div className="chart-card">
@@ -1513,8 +1589,11 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
           </div>
         </div>
       </ChartErrorBoundary>
+        </>
+      )}
 
       {/* Main Granular Data Table Component with Horizontal Scrolling */}
+      {showTasks && (
       <ChartErrorBoundary fallbackTitle="Tasks Table Unavailable" onReset={clearAllFilters}>
         <div className="chart-card" style={{ marginBottom: 0 }}>
         <div className="chart-card-header">
@@ -1782,9 +1861,10 @@ export const VisualDashboard: React.FC<VisualDashboardProps> = ({ onOpenUpload }
         )}
       </div>
       </ChartErrorBoundary>
+      )}
 
       {/* Gantt Chart Component at the bottom of the dashboard layout */}
-      <GanttChartVisualization />
+      {showGantt && <GanttChartVisualization />}
         </>
       )}
     </div>

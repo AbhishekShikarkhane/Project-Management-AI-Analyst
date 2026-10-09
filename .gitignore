@@ -30,6 +30,12 @@ yarn-debug.log*
 yarn-error.log*
 console.log*
 
+# SQLite journal and scratch directories
+*.db-wal
+*.db-shm
+data/backups/
+data/test_scratch/
+
 # Git Windows restriction: Filenames with trailing spaces are blocked by Git on Windows
 # Keep standard "Project Management" tracked, ignore the trailing-space duplicate
 Project Management\ 

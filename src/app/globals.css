@@ -1115,6 +1115,36 @@ body::after {
   }
 }
 
+/* AI Chat Focus: AI Copilot occupies full workspace without empty void */
+.main-content-split.single-chat {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+}
+
+.main-content-split.single-chat .chat-main {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: 1 1 100% !important;
+  position: static !important;
+  height: calc(100vh - 120px) !important;
+  min-height: 700px !important;
+  max-height: none !important;
+}
+
+/* Maximize Dashboard: Visual Dashboard occupies full workspace */
+.main-content-split.single-dashboard {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+}
+
+.main-content-split.single-dashboard section {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: 1 1 100% !important;
+}
+
 /* Visualization Panel - Flows naturally without height clipping */
 .visual-dashboard-container {
   display: flex;
@@ -1503,8 +1533,7 @@ body::after {
 }
 
 /* Ensure the graphical timeline grid takes up the remaining width on the right */
-.gantt-card-wrapper ._CZjuD,
-.gantt-card-wrapper div[dir="ltr"] {
+.gantt-card-wrapper ._CZjuD {
   flex: 1 1 0% !important;
   min-width: 0 !important;
   width: 100% !important;
@@ -1516,25 +1545,61 @@ body::after {
 /* Timeline Horizontal SVG container */
 .gantt-card-wrapper ._2B2zv {
   overflow-x: visible !important;
+  min-width: 100% !important;
+}
+
+/* Gantt horizontal scroll wrapper synchronization */
+.gantt-card-wrapper ._2k9Ys {
+  overflow-x: auto !important;
+  height: 12px !important;
+  background: #0B132B !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
 
 /* Custom scrollbars inside the Gantt timeline */
-.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar {
+.gantt-card-wrapper ._CZjuD::-webkit-scrollbar,
+.gantt-card-wrapper ._2k9Ys::-webkit-scrollbar {
   height: 8px;
   width: 8px;
 }
 
-.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar-track {
+.gantt-card-wrapper ._CZjuD::-webkit-scrollbar-track,
+.gantt-card-wrapper ._2k9Ys::-webkit-scrollbar-track {
   background: rgba(15, 23, 42, 0.8);
 }
 
-.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar-thumb {
-  background: rgba(56, 189, 248, 0.35);
+.gantt-card-wrapper ._CZjuD::-webkit-scrollbar-thumb,
+.gantt-card-wrapper ._2k9Ys::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.45);
   border-radius: 4px;
 }
 
-.gantt-card-wrapper div[dir="ltr"]::-webkit-scrollbar-thumb:hover {
-  background: rgba(56, 189, 248, 0.6);
+.gantt-card-wrapper ._CZjuD::-webkit-scrollbar-thumb:hover,
+.gantt-card-wrapper ._2k9Ys::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.7);
+}
+
+/* Gantt Task Bars Visibility & Styling */
+.gantt-scroll-wrapper g.bar {
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+.gantt-scroll-wrapper g.bar rect {
+  opacity: 1 !important;
+  visibility: visible !important;
+  rx: 4px !important;
+  ry: 4px !important;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+
+.gantt-scroll-wrapper g._KxSXS {
+  cursor: pointer !important;
+  transition: filter 0.15s ease;
+}
+
+.gantt-scroll-wrapper g._KxSXS:hover {
+  filter: brightness(1.2) drop-shadow(0 0 8px rgba(56, 189, 248, 0.5));
 }
 
 .gantt-scroll-wrapper svg {
@@ -1744,4 +1809,167 @@ body::after {
   cursor: not-allowed;
 }
 
+/* ==========================================================================
+   CLEAN WORKSPACE LAYOUT & TOP NAVIGATION
+   ========================================================================== */
+.app-workspace-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  width: 100%;
+  position: relative;
+  background-color: var(--bg-primary);
+}
+
+.app-header-container {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  width: 100%;
+  background: rgba(10, 15, 29, 0.95);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0 24px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.app-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  flex-wrap: wrap;
+}
+
+.brand-title-row {
+  font-size: 1.08rem;
+  font-weight: 700;
+  color: #F8FAFC;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+
+.nav-tabs-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.nav-tabs-wrapper::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #94A3B8;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.nav-tab-btn:hover {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.25);
+  color: #E2E8F0;
+  transform: translateY(-1px);
+}
+
+.nav-tab-btn.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #FFFFFF;
+  font-weight: 600;
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.25);
+}
+
+.nav-tab-btn .tab-icon {
+  flex-shrink: 0;
+  color: #818CF8;
+}
+
+.nav-tab-btn.active .tab-icon {
+  color: #A5B4FC;
+}
+
+.header-view-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-mode-label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #64748B;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.view-mode-buttons {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.view-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #94A3B8;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.view-mode-btn:hover {
+  color: #F8FAFC;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.view-mode-btn.active {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #FFFFFF;
+  font-weight: 600;
+}
+
+.db-loader-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid rgba(99, 102, 241, 0.2);
+  border-top-color: #6366F1;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
 
