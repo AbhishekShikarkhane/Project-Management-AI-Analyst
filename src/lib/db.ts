@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { ProjectTask, cleanNumber, cleanProgress } from './dataset';
@@ -7,9 +7,8 @@ import {
   calculateDatasetSummary,
   analyzeBudgetVariance,
   BudgetVarianceAnalysis,
-  isValidProgress,
-  normalizeProgress,
 } from './analytics';
+import fallbackPortfolioRows from './fallbackPortfolio.json';
 
 export interface DatabaseImportResult {
   success: boolean;
@@ -28,17 +27,71 @@ export interface TaskFilterOptions {
   project?: string | null;
 }
 
-let dbInstance: Database.Database | null = null;
+let dbInstance: any = null;
 let currentDbPath: string | null = null;
+let sqliteAvailable: boolean | null = null;
+
+// In-memory fallback tasks store when SQLite is unavailable (e.g., Vercel Serverless Functions)
+let inMemoryFallbackTasks: ProjectTask[] | null = null;
+
+/**
+ * Checks whether better-sqlite3 native bindings are functional in the active runtime.
+ */
+export function isSqliteAvailable(): boolean {
+  if (sqliteAvailable !== null) return sqliteAvailable;
+  try {
+    const DatabaseConstructor = require('better-sqlite3');
+    // Test in-memory instantiation to confirm native addon works
+    const testDb = new DatabaseConstructor(':memory:');
+    testDb.close();
+    sqliteAvailable = true;
+  } catch (err: any) {
+    console.warn(
+      'SQLite (better-sqlite3) native module unavailable in this environment. Falling back to embedded dataset store:',
+      err?.message || err
+    );
+    sqliteAvailable = false;
+  }
+  return sqliteAvailable;
+}
 
 /**
  * Returns default production/development SQLite database path.
- * Can be overridden with process.env.DATABASE_FILE or explicit argument.
+ * In serverless environments (Vercel, AWS Lambda), uses writable /tmp directory.
  */
 export function getDefaultDbPath(): string {
   if (process.env.DATABASE_FILE) {
     return path.resolve(process.env.DATABASE_FILE);
   }
+
+  const isServerless = Boolean(
+    process.env.VERCEL ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.LAMBDA_TASK_ROOT ||
+    process.env.NETLIFY
+  );
+
+  if (isServerless) {
+    const tmpDataDir = path.join('/tmp', 'data');
+    if (!fs.existsSync(tmpDataDir)) {
+      try {
+        fs.mkdirSync(tmpDataDir, { recursive: true });
+      } catch {}
+    }
+    const tmpDbPath = path.join(tmpDataDir, 'pm_insight_engine.db');
+    if (!fs.existsSync(tmpDbPath)) {
+      const bundledPath = path.join(process.cwd(), 'data', 'pm_insight_engine.db');
+      if (fs.existsSync(bundledPath)) {
+        try {
+          fs.copyFileSync(bundledPath, tmpDbPath);
+        } catch (e) {
+          console.warn('Could not copy bundled DB to /tmp:', e);
+        }
+      }
+    }
+    return tmpDbPath;
+  }
+
   const dataDir = path.join(process.cwd(), 'data');
   if (!fs.existsSync(dataDir)) {
     try {
@@ -50,16 +103,19 @@ export function getDefaultDbPath(): string {
 
 /**
  * Returns the singleton or specified database connection.
- * Configures WAL mode, busy timeout, and foreign keys for high reliability and concurrency.
+ * Returns null gracefully if better-sqlite3 cannot be initialized.
  */
-export function getDatabase(targetPath?: string): Database.Database {
+export function getDatabase(targetPath?: string): any {
+  if (!isSqliteAvailable()) {
+    return null;
+  }
+
   const chosenPath = targetPath ? path.resolve(targetPath) : getDefaultDbPath();
 
   if (dbInstance && currentDbPath === chosenPath) {
     return dbInstance;
   }
 
-  // If switching databases (e.g. during test runs), close previous instance
   if (dbInstance) {
     try {
       dbInstance.close();
@@ -67,28 +123,33 @@ export function getDatabase(targetPath?: string): Database.Database {
     dbInstance = null;
   }
 
-  const dir = path.dirname(chosenPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  try {
+    const dir = path.dirname(chosenPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const DatabaseConstructor = require('better-sqlite3');
+    const db = new DatabaseConstructor(chosenPath, {});
+
+    try {
+      db.pragma('journal_mode = WAL');
+      db.pragma('synchronous = NORMAL');
+      db.pragma('foreign_keys = ON');
+      db.pragma('busy_timeout = 5000');
+    } catch (pragmaErr) {
+      console.warn('SQLite pragma warning:', pragmaErr);
+    }
+
+    dbInstance = db;
+    currentDbPath = chosenPath;
+
+    initDatabaseSchema(db);
+    return db;
+  } catch (err: any) {
+    console.warn('getDatabase error:', err?.message || err);
+    return null;
   }
-
-  const db = new Database(chosenPath, {
-    // verbose: process.env.NODE_ENV === 'development' ? console.log : undefined,
-  });
-
-  // Enable WAL (Write-Ahead Logging) mode for concurrent readers & fast writes
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
-
-  dbInstance = db;
-  currentDbPath = chosenPath;
-
-  // Initialize schema if needed
-  initDatabaseSchema(db);
-
-  return db;
 }
 
 /**
@@ -107,7 +168,8 @@ export function closeDatabase(): void {
 /**
  * Initializes database schema with primary keys, foreign keys, constraints, and indexes.
  */
-export function initDatabaseSchema(db: Database.Database): void {
+export function initDatabaseSchema(db: any): void {
+  if (!db) return;
   db.exec(`
     -- Projects table
     CREATE TABLE IF NOT EXISTS projects (
@@ -240,10 +302,20 @@ export function rowToProjectTask(row: any): ProjectTask {
 }
 
 /**
+ * Returns embedded authoritative 150 tasks (used when SQLite is unavailable in Serverless)
+ */
+export function getFallbackTasks(): ProjectTask[] {
+  if (!inMemoryFallbackTasks) {
+    inMemoryFallbackTasks = (fallbackPortfolioRows as any[]).map(rowToProjectTask);
+  }
+  return inMemoryFallbackTasks;
+}
+
+/**
  * Synchronizes aggregate projects and departments tables from current tasks table.
  */
-export function syncAggregateEntities(db: Database.Database): void {
-  // Clear and rebuild projects and departments based on current tasks
+export function syncAggregateEntities(db: any): void {
+  if (!db) return;
   const projectAggregates = db
     .prepare(
       `
@@ -278,12 +350,10 @@ export function syncAggregateEntities(db: Database.Database): void {
     insertProjectStmt.run(pa);
   }
 
-  // Remove projects with no tasks
   db.exec(`
     DELETE FROM projects WHERE project_name NOT IN (SELECT DISTINCT project_name FROM tasks)
   `);
 
-  // Departments
   const deptAggregates = db
     .prepare(
       `
@@ -317,35 +387,19 @@ export function syncAggregateEntities(db: Database.Database): void {
 }
 
 /**
- * Performs a transactional, atomic import of tasks.
- * Validates all records before committing.
- * If mode is 'replace', clears existing tasks first within the transaction.
- * If mode is 'upsert', inserts new or updates existing records.
- * On any fatal validation or execution error, rolls back completely without corrupting active dataset.
+ * Validates and imports a collection of task records into the database with full transaction safety.
  */
 export function importTasksTransaction(
   rawTasks: any[],
-  options: {
+  options?: {
     fileName?: string;
-    mode?: 'replace' | 'upsert';
-    db?: Database.Database;
-  } = {}
-): DatabaseImportResult {
-  const db = options.db || getDatabase();
-  const mode = options.mode || 'replace';
-  const fileName = options.fileName || 'imported_dataset.csv';
-
-  if (!rawTasks || !Array.isArray(rawTasks) || rawTasks.length === 0) {
-    return {
-      success: false,
-      imported: 0,
-      skipped: 0,
-      rejected: 0,
-      errors: ['No task records found in the import payload.'],
-      totalBudget: 0,
-      totalSpend: 0,
-    };
+    mode?: 'replace' | 'append' | 'upsert';
+    db?: any;
   }
+): DatabaseImportResult {
+  const mode = options?.mode || 'replace';
+  const fileName = options?.fileName || 'manual_import.csv';
+  const db = options?.db || getDatabase();
 
   const errors: string[] = [];
   const validRecords: any[] = [];
@@ -353,7 +407,6 @@ export function importTasksTransaction(
   let skipped = 0;
   let rejected = 0;
 
-  // Validation phase
   for (let i = 0; i < rawTasks.length; i++) {
     const r = rawTasks[i];
     const taskId = String(r.Task_ID || r['Task ID'] || r.id || '').trim();
@@ -366,7 +419,6 @@ export function importTasksTransaction(
 
     if (seenTaskIds.has(taskId)) {
       if (mode === 'replace') {
-        // In replace mode, duplicate IDs in same file are rejected/skipped
         errors.push(`Row ${i + 1}: Duplicate Task_ID '${taskId}' found in import file.`);
         skipped++;
         continue;
@@ -380,7 +432,6 @@ export function importTasksTransaction(
     const priority = String(r.Priority || r.priority || 'Medium').trim();
     const status = String(r.Status || r.status || 'Planned').trim();
 
-    // Budget and Spend validation
     const rawBudget = r.Allocated_Budget_USD ?? r['Allocated Budget ($)'] ?? r.Budget ?? r['Budget (USD)'] ?? r.budget;
     const rawSpend = r.Actual_Spend_USD ?? r['Actual Spend ($)'] ?? r.Spent ?? r['Spent (USD)'] ?? r.spend;
 
@@ -398,13 +449,11 @@ export function importTasksTransaction(
       continue;
     }
 
-    // Progress validation
     const rawProg = r.Progress_Percent ?? r['Progress (%)'] ?? r.Progress ?? r.progress;
     let progressVal = 0;
     if (rawProg !== undefined && rawProg !== null && String(rawProg).trim() !== '') {
       progressVal = cleanProgress(rawProg, status);
     } else {
-      // Documented business rule: derive sensible default based on status
       const stLower = status.toLowerCase();
       if (stLower.includes('complete') || stLower.includes('done')) progressVal = 100;
       else if (stLower.includes('progress') || stLower.includes('track')) progressVal = 50;
@@ -454,215 +503,352 @@ export function importTasksTransaction(
   }
 
   if (validRecords.length === 0) {
-    db.prepare(`
-      INSERT INTO dataset_imports (file_name, record_count, total_budget, total_spend, status, error_message)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(fileName, 0, 0, 0, 'FAILED', errors.join('; '));
-
     return {
       success: false,
       imported: 0,
       skipped,
       rejected,
-      errors: errors.length > 0 ? errors : ['No valid records could be processed.'],
+      errors: errors.length > 0 ? errors : ['No valid task records found in import.'],
       totalBudget: 0,
       totalSpend: 0,
     };
   }
 
-  // Pre-seed referenced projects to satisfy foreign key constraints
-  const uniqueProjects = Array.from(new Set(validRecords.map((vr) => vr.project_name)));
+  // If SQLite is available, persist via transaction
+  if (db) {
+    const insertTransaction = db.transaction(() => {
+      const seedProjectStmt = db.prepare(`
+        INSERT OR IGNORE INTO projects (project_name, department, project_manager)
+        VALUES (?, ?, ?)
+      `);
+      for (const vr of validRecords) {
+        seedProjectStmt.run(vr.project_name, vr.department, vr.owner);
+      }
 
-  // Atomic database transaction
-  const insertTransaction = db.transaction(() => {
-    // 1. Ensure projects exist in parent table first so FK passes
-    const seedProjectStmt = db.prepare(`
-      INSERT OR IGNORE INTO projects (project_name, department, project_manager)
-      VALUES (?, ?, ?)
-    `);
-    for (const vr of validRecords) {
-      seedProjectStmt.run(vr.project_name, vr.department, vr.owner);
+      if (mode === 'replace') {
+        db.prepare('DELETE FROM tasks').run();
+      }
+
+      const insertTaskStmt = db.prepare(`
+        INSERT INTO tasks (
+          task_id, project_name, task_title, sprint, owner, department,
+          priority, status, progress_percent, estimated_hours, actual_hours,
+          allocated_budget, actual_spend, start_date, due_date, end_date,
+          risk_level, team_members_count, blocker_details, raw_json, updated_at
+        ) VALUES (
+          @task_id, @project_name, @task_title, @sprint, @owner, @department,
+          @priority, @status, @progress_percent, @estimated_hours, @actual_hours,
+          @allocated_budget, @actual_spend, @start_date, @due_date, @end_date,
+          @risk_level, @team_members_count, @blocker_details, @raw_json, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT(task_id) DO UPDATE SET
+          project_name = excluded.project_name,
+          task_title = excluded.task_title,
+          sprint = excluded.sprint,
+          owner = excluded.owner,
+          department = excluded.department,
+          priority = excluded.priority,
+          status = excluded.status,
+          progress_percent = excluded.progress_percent,
+          estimated_hours = excluded.estimated_hours,
+          actual_hours = excluded.actual_hours,
+          allocated_budget = excluded.allocated_budget,
+          actual_spend = excluded.actual_spend,
+          start_date = excluded.start_date,
+          due_date = excluded.due_date,
+          end_date = excluded.end_date,
+          risk_level = excluded.risk_level,
+          team_members_count = excluded.team_members_count,
+          blocker_details = excluded.blocker_details,
+          raw_json = excluded.raw_json,
+          updated_at = CURRENT_TIMESTAMP
+      `);
+
+      for (const record of validRecords) {
+        insertTaskStmt.run(record);
+      }
+
+      syncAggregateEntities(db);
+
+      const totals = db.prepare('SELECT SUM(allocated_budget) as totalBudget, SUM(actual_spend) as totalSpend, COUNT(*) as count FROM tasks').get() as any;
+
+      db.prepare(`
+        INSERT INTO dataset_imports (file_name, record_count, total_budget, total_spend, status, error_message)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        fileName,
+        totals.count || validRecords.length,
+        totals.totalBudget || 0,
+        totals.totalSpend || 0,
+        'SUCCESS',
+        errors.length > 0 ? `Completed with ${errors.length} warnings: ${errors.slice(0, 3).join('; ')}` : null
+      );
+
+      return totals;
+    });
+
+    try {
+      const finalTotals = insertTransaction();
+      return {
+        success: true,
+        imported: validRecords.length,
+        skipped,
+        rejected,
+        errors,
+        totalBudget: Number(finalTotals.totalBudget || 0),
+        totalSpend: Number(finalTotals.totalSpend || 0),
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        imported: 0,
+        skipped,
+        rejected: rawTasks.length,
+        errors: [`Database transaction rolled back: ${err.message}`],
+        totalBudget: 0,
+        totalSpend: 0,
+      };
     }
-
-    // 2. If replace mode, clear existing tasks
-    if (mode === 'replace') {
-      db.prepare('DELETE FROM tasks').run();
-    }
-
-    // 3. Insert or Replace tasks
-    const insertTaskStmt = db.prepare(`
-      INSERT INTO tasks (
-        task_id, project_name, task_title, sprint, owner, department,
-        priority, status, progress_percent, estimated_hours, actual_hours,
-        allocated_budget, actual_spend, start_date, due_date, end_date,
-        risk_level, team_members_count, blocker_details, raw_json, updated_at
-      ) VALUES (
-        @task_id, @project_name, @task_title, @sprint, @owner, @department,
-        @priority, @status, @progress_percent, @estimated_hours, @actual_hours,
-        @allocated_budget, @actual_spend, @start_date, @due_date, @end_date,
-        @risk_level, @team_members_count, @blocker_details, @raw_json, CURRENT_TIMESTAMP
-      )
-      ON CONFLICT(task_id) DO UPDATE SET
-        project_name = excluded.project_name,
-        task_title = excluded.task_title,
-        sprint = excluded.sprint,
-        owner = excluded.owner,
-        department = excluded.department,
-        priority = excluded.priority,
-        status = excluded.status,
-        progress_percent = excluded.progress_percent,
-        estimated_hours = excluded.estimated_hours,
-        actual_hours = excluded.actual_hours,
-        allocated_budget = excluded.allocated_budget,
-        actual_spend = excluded.actual_spend,
-        start_date = excluded.start_date,
-        due_date = excluded.due_date,
-        end_date = excluded.end_date,
-        risk_level = excluded.risk_level,
-        team_members_count = excluded.team_members_count,
-        blocker_details = excluded.blocker_details,
-        raw_json = excluded.raw_json,
-        updated_at = CURRENT_TIMESTAMP
-    `);
-
-    for (const record of validRecords) {
-      insertTaskStmt.run(record);
-    }
-
-    // 4. Update parent projects and departments aggregates
-    syncAggregateEntities(db);
-
-    // 5. Calculate final imported totals
-    const totals = db.prepare('SELECT SUM(allocated_budget) as totalBudget, SUM(actual_spend) as totalSpend, COUNT(*) as count FROM tasks').get() as any;
-
-    // 6. Record in dataset_imports audit log
-    db.prepare(`
-      INSERT INTO dataset_imports (file_name, record_count, total_budget, total_spend, status, error_message)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      fileName,
-      totals.count || validRecords.length,
-      totals.totalBudget || 0,
-      totals.totalSpend || 0,
-      'SUCCESS',
-      errors.length > 0 ? `Completed with ${errors.length} warnings: ${errors.slice(0, 3).join('; ')}` : null
-    );
-
-    return totals;
-  });
-
-  try {
-    const finalTotals = insertTransaction();
-    return {
-      success: true,
-      imported: validRecords.length,
-      skipped,
-      rejected,
-      errors,
-      totalBudget: Number(finalTotals.totalBudget || 0),
-      totalSpend: Number(finalTotals.totalSpend || 0),
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      imported: 0,
-      skipped,
-      rejected: rawTasks.length,
-      errors: [`Database transaction rolled back: ${err.message}`],
-      totalBudget: 0,
-      totalSpend: 0,
-    };
   }
+
+  // Fallback: update in-memory tasks
+  const mappedTasks = validRecords.map(rowToProjectTask);
+  if (mode === 'replace') {
+    inMemoryFallbackTasks = mappedTasks;
+  } else {
+    const existing = getFallbackTasks();
+    const existingMap = new Map(existing.map((t) => [t.Task_ID, t]));
+    for (const mt of mappedTasks) {
+      existingMap.set(mt.Task_ID, mt);
+    }
+    inMemoryFallbackTasks = Array.from(existingMap.values());
+  }
+
+  const totalBudget = mappedTasks.reduce((sum, t) => sum + (t.Allocated_Budget_USD || 0), 0);
+  const totalSpend = mappedTasks.reduce((sum, t) => sum + (t.Actual_Spend_USD || 0), 0);
+
+  return {
+    success: true,
+    imported: validRecords.length,
+    skipped,
+    rejected,
+    errors,
+    totalBudget,
+    totalSpend,
+  };
 }
 
 /**
- * Retrieves all task records from persistent database.
- * If empty, automatically seeds from authoritative CSV.
+ * Retrieves all task records from persistent database or resilient fallback dataset.
  */
-export function getAllTasksFromDB(dbParam?: Database.Database): ProjectTask[] {
-  const db = dbParam || getDatabase();
-  autoSeedIfEmpty(db);
-
-  const rows = db.prepare('SELECT * FROM tasks ORDER BY task_id ASC').all();
-  return rows.map(rowToProjectTask);
+export function getAllTasksFromDB(dbParam?: any): ProjectTask[] {
+  try {
+    const db = dbParam || getDatabase();
+    if (db) {
+      autoSeedIfEmpty(db);
+      const rows = db.prepare('SELECT * FROM tasks ORDER BY task_id ASC').all();
+      if (rows && rows.length > 0) {
+        return rows.map(rowToProjectTask);
+      }
+    }
+  } catch (err) {
+    console.warn('getAllTasksFromDB SQLite query failed; falling back to embedded dataset:', err);
+  }
+  return getFallbackTasks();
 }
 
 /**
- * Retrieves filtered task records with parameter binding.
+ * Retrieves filtered task records with parameter binding or in-memory filtering.
  */
 export function getTasksFilteredFromDB(
   filters: TaskFilterOptions,
-  dbParam?: Database.Database
+  dbParam?: any
 ): ProjectTask[] {
-  const db = dbParam || getDatabase();
-  autoSeedIfEmpty(db);
+  try {
+    const db = dbParam || getDatabase();
+    if (db) {
+      autoSeedIfEmpty(db);
+      const conditions: string[] = [];
+      const params: Record<string, any> = {};
 
-  const conditions: string[] = [];
-  const params: Record<string, any> = {};
+      if (filters.department) {
+        conditions.push('LOWER(department) = LOWER(@department)');
+        params.department = filters.department.trim();
+      }
+      if (filters.status) {
+        conditions.push('LOWER(status) = LOWER(@status)');
+        params.status = filters.status.trim();
+      }
+      if (filters.riskLevel) {
+        conditions.push('LOWER(risk_level) = LOWER(@riskLevel)');
+        params.riskLevel = filters.riskLevel.trim();
+      }
+      if (filters.project) {
+        conditions.push('LOWER(project_name) = LOWER(@project)');
+        params.project = filters.project.trim();
+      }
 
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const query = `SELECT * FROM tasks ${whereClause} ORDER BY task_id ASC`;
+
+      const rows = db.prepare(query).all(params);
+      if (rows && rows.length > 0) {
+        return rows.map(rowToProjectTask);
+      }
+    }
+  } catch (err) {
+    console.warn('getTasksFilteredFromDB SQLite query failed; falling back to memory filter:', err);
+  }
+
+  // Resilient memory filter
+  let tasks = getFallbackTasks();
   if (filters.department) {
-    conditions.push('LOWER(department) = LOWER(@department)');
-    params.department = filters.department.trim();
+    const dept = filters.department.trim().toLowerCase();
+    tasks = tasks.filter((t) => t.Department?.toLowerCase() === dept);
   }
   if (filters.status) {
-    conditions.push('LOWER(status) = LOWER(@status)');
-    params.status = filters.status.trim();
+    const st = filters.status.trim().toLowerCase();
+    tasks = tasks.filter((t) => t.Status?.toLowerCase() === st);
   }
   if (filters.riskLevel) {
-    conditions.push('LOWER(risk_level) = LOWER(@riskLevel)');
-    params.riskLevel = filters.riskLevel.trim();
+    const rk = filters.riskLevel.trim().toLowerCase();
+    tasks = tasks.filter((t) => t.Risk_Level?.toLowerCase() === rk);
   }
   if (filters.project) {
-    conditions.push('LOWER(project_name) = LOWER(@project)');
-    params.project = filters.project.trim();
+    const pj = filters.project.trim().toLowerCase();
+    tasks = tasks.filter((t) => t.Project_Name?.toLowerCase() === pj);
   }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const query = `SELECT * FROM tasks ${whereClause} ORDER BY task_id ASC`;
-
-  const rows = db.prepare(query).all(params);
-  return rows.map(rowToProjectTask);
+  return tasks;
 }
 
 /**
- * Returns deterministic dataset summary calculated from database records.
+ * Returns deterministic dataset summary calculated from database or fallback records.
  */
 export function getPortfolioSummaryFromDB(
   filters?: TaskFilterOptions,
-  dbParam?: Database.Database
+  dbParam?: any
 ): DatasetSummary {
   const tasks = filters ? getTasksFilteredFromDB(filters, dbParam) : getAllTasksFromDB(dbParam);
   return calculateDatasetSummary(tasks);
 }
 
 /**
- * Returns deterministic budget variance calculated from database records.
+ * Returns deterministic budget variance calculated from database or fallback records.
  */
 export function getBudgetVarianceFromDB(
   filters?: TaskFilterOptions,
-  dbParam?: Database.Database
+  dbParam?: any
 ): BudgetVarianceAnalysis {
   const tasks = filters ? getTasksFilteredFromDB(filters, dbParam) : getAllTasksFromDB(dbParam);
   return analyzeBudgetVariance(tasks);
 }
 
 /**
- * Inserts or updates a single task directly in persistent storage.
+ * Inserts or updates a single task directly in persistent storage or fallback memory.
  */
-export function upsertTaskInDB(task: Partial<ProjectTask>, dbParam?: Database.Database): boolean {
+export function upsertTaskInDB(
+  task: Partial<ProjectTask> & { Task_ID: string },
+  dbParam?: any
+): boolean {
+  const taskId = task.Task_ID;
+  if (!taskId) return false;
+
   const db = dbParam || getDatabase();
-  const res = importTasksTransaction([task], { mode: 'upsert', fileName: 'manual_upsert', db });
-  return res.success;
+  if (db) {
+    try {
+      const existing = db.prepare('SELECT * FROM tasks WHERE task_id = ?').get(taskId) as any;
+      const budget = task.Allocated_Budget_USD ?? task.Budget ?? existing?.allocated_budget ?? 0;
+      const spend = task.Actual_Spend_USD ?? task.Spent ?? existing?.actual_spend ?? 0;
+      const progress = task.Progress_Percent ?? task.Progress ?? existing?.progress_percent ?? 0;
+      const project = task.Project_Name ?? existing?.project_name ?? 'General Project';
+      const title = task.Task_Title ?? existing?.task_title ?? `Task ${taskId}`;
+      const department = task.Department ?? existing?.department ?? 'Engineering';
+      const priority = task.Priority ?? existing?.priority ?? 'Medium';
+      const status = task.Status ?? existing?.status ?? 'Planned';
+      const start = task.Start_Date ?? existing?.start_date ?? '2026-09-01';
+      const due = task.Due_Date ?? existing?.due_date ?? '2026-10-15';
+      const end = task.End_Date ?? due;
+      const owner = task.Owner ?? task.Project_Manager ?? existing?.owner ?? '';
+      const sprint = task.Sprint ?? existing?.sprint ?? 'Sprint 1';
+      const risk = task.Risk_Level ?? existing?.risk_level ?? 'Low';
+      const team = task.Number_of_Team_Members ?? task.Team_Members_Count ?? existing?.team_members_count ?? 1;
+      const blocker = task.Blocker_Details ?? existing?.blocker_details ?? 'None';
+
+      db.prepare(`
+        INSERT OR IGNORE INTO projects (project_name, department, project_manager)
+        VALUES (?, ?, ?)
+      `).run(project, department, owner);
+
+      db.prepare(`
+        INSERT INTO tasks (
+          task_id, project_name, task_title, sprint, owner, department,
+          priority, status, progress_percent, estimated_hours, actual_hours,
+          allocated_budget, actual_spend, start_date, due_date, end_date,
+          risk_level, team_members_count, blocker_details, raw_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(task_id) DO UPDATE SET
+          project_name = excluded.project_name,
+          task_title = excluded.task_title,
+          sprint = excluded.sprint,
+          owner = excluded.owner,
+          department = excluded.department,
+          priority = excluded.priority,
+          status = excluded.status,
+          progress_percent = excluded.progress_percent,
+          allocated_budget = excluded.allocated_budget,
+          actual_spend = excluded.actual_spend,
+          start_date = excluded.start_date,
+          due_date = excluded.due_date,
+          end_date = excluded.end_date,
+          risk_level = excluded.risk_level,
+          team_members_count = excluded.team_members_count,
+          blocker_details = excluded.blocker_details,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(
+        taskId, project, title, sprint, owner, department,
+        priority, status, progress, 0, 0, budget, spend,
+        start, due, end, risk, team, blocker, JSON.stringify(task)
+      );
+
+      syncAggregateEntities(db);
+      return true;
+    } catch (err) {
+      console.warn('upsertTaskInDB SQLite error:', err);
+    }
+  }
+
+  // Fallback update
+  const tasks = getFallbackTasks();
+  const index = tasks.findIndex((t) => t.Task_ID === taskId);
+  if (index !== -1) {
+    tasks[index] = { ...tasks[index], ...task } as ProjectTask;
+  } else {
+    tasks.push(task as ProjectTask);
+  }
+  return true;
 }
 
 /**
- * Deletes a single task from database and updates aggregates.
+ * Removes a task from persistent storage or fallback memory.
  */
-export function deleteTaskFromDB(taskId: string, dbParam?: Database.Database): boolean {
+export function deleteTaskFromDB(taskId: string, dbParam?: any): boolean {
   const db = dbParam || getDatabase();
-  const info = db.prepare('DELETE FROM tasks WHERE task_id = ?').run(taskId);
-  if (info.changes > 0) {
-    syncAggregateEntities(db);
+  if (db) {
+    try {
+      const info = db.prepare('DELETE FROM tasks WHERE task_id = ?').run(taskId);
+      if (info.changes > 0) {
+        syncAggregateEntities(db);
+        return true;
+      }
+    } catch (err) {
+      console.warn('deleteTaskFromDB SQLite error:', err);
+    }
+  }
+
+  const tasks = getFallbackTasks();
+  const index = tasks.findIndex((t) => t.Task_ID === taskId);
+  if (index !== -1) {
+    tasks.splice(index, 1);
     return true;
   }
   return false;
@@ -671,35 +857,40 @@ export function deleteTaskFromDB(taskId: string, dbParam?: Database.Database): b
 /**
  * Automatically seeds the database from authoritative CSV if the database has 0 tasks.
  */
-export function autoSeedIfEmpty(db: Database.Database): void {
-  const countRow = db.prepare('SELECT COUNT(*) as count FROM tasks').get() as { count: number };
-  if (countRow && countRow.count > 0) {
-    return;
-  }
-
-  const authoritativePath = path.join(
-    process.cwd(),
-    'Data set',
-    '150-Project Portfolio (150 tasks).csv'
-  );
-
-  if (!fs.existsSync(authoritativePath)) {
-    return;
-  }
-
+export function autoSeedIfEmpty(db: any): void {
+  if (!db) return;
   try {
+    const countRow = db.prepare('SELECT COUNT(*) as count FROM tasks').get() as { count: number };
+    if (countRow && countRow.count > 0) {
+      return;
+    }
+
+    const authoritativePath = path.join(
+      process.cwd(),
+      'Data set',
+      '150-Project Portfolio (150 tasks).csv'
+    );
+
+    if (!fs.existsSync(authoritativePath)) {
+      // Seed directly from fallback JSON
+      importTasksTransaction(fallbackPortfolioRows, {
+        fileName: '150-Project Portfolio (150 tasks).csv',
+        mode: 'replace',
+        db,
+      });
+      return;
+    }
+
     const content = fs.readFileSync(authoritativePath, 'utf-8');
     const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (lines.length < 2) return;
 
-    // Parse CSV headers
     const headerLine = lines[0];
     const headers = headerLine.split(',').map((h) => h.replace(/^"|"$/g, '').trim());
 
     const records: any[] = [];
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
-      // Basic CSV splitter
       const cols: string[] = [];
       let current = '';
       let inQuotes = false;
